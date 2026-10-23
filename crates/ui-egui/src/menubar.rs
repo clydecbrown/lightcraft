@@ -172,12 +172,15 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "@Sort",
             "@Stacks",
             "view.filterBar",
+            "library.toggleFilters",
             "library.clearFilter",
             "library.refresh",
             "library.holdView",
             "---",
             "compare.swap",
             "compare.makeSelect",
+            "---",
+            "view.viewOptions",
         ],
     ),
     (
@@ -212,6 +215,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "photo.reload",
             "photo.readFocusPoints",
             "app.showInFinder",
+            "app.showInFolders",
             "dialog.rename",
             "dialog.captureTime",
             "photo.tagFromTracklog",
@@ -350,6 +354,7 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "view.beforeAfterSplit" => Some(u.before_after == crate::state::BeforeAfter::Split),
         "view.autoAdvance" => Some(u.auto_advance),
         "view.filterBar" => Some(u.filter_bar),
+        "library.toggleFilters" => Some(!app.session.filters_off()),
         "view.soloSections" => Some(u.single_panel),
         "view.navigator" => Some(u.navigator),
         "view.layoutImage" => Some(u.layout_image.show && !u.layout_image.path.trim().is_empty()),
@@ -962,9 +967,10 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
     }
     if let Some((id, params)) = clicked {
         let r = run_item(app, &id, params);
-        // an export that can't start (e.g. no folder) says why instead of doing nothing
+        // an export that can't start (e.g. no folder), or a backup / restore the host refuses
+        // (changes still unsaved, nothing stored in this browser), says why instead of doing nothing
         if let Err(e) = r
-            && matches!(id.as_str(), "app.export" | "app.exportPrevious")
+            && matches!(id.as_str(), "app.export" | "app.exportPrevious" | "file.backupLibrary" | "file.restoreLibrary")
         {
             app.toast(ui.ctx(), e);
         }
@@ -1044,6 +1050,7 @@ fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Opti
                     b = b.shortcut_text(shortcut_text(sc, mac));
                 }
                 let r = ui.add_enabled(*enabled, b);
+                crate::widgets::register(ui.ctx(), format!("menuitem:{id}"), r.rect);
                 if *checked == Some(true) {
                     let t = crate::theme::Tokens::get(ui.ctx());
                     let c = egui::Rect::from_center_size(egui::pos2(r.rect.left() + 11.0, r.rect.center().y), egui::vec2(13.0, 13.0));
@@ -1388,6 +1395,47 @@ mod tests {
         let p = app.session.catalog.photo(id).unwrap();
         assert_eq!(p.file_name, "one-renamed.png");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Regression test for #49: the in-window menu headings (File, Edit, ...) sat only egui's default
+    // 8 px apart, too close to read or aim at.
+    #[test]
+    fn in_window_menu_headings_are_spaced_apart() {
+        let mut a = app();
+        a.native_menu = false;
+        let mut h = crate::headless::Headless::new(a, [1400.0, 900.0], 1.0);
+        h.step();
+        h.step();
+        let rect = |id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("{id} is on screen"));
+        let titles: Vec<_> = ["File", "Edit", "View", "Photo", "Window", "Help"].iter().map(|t| rect(&format!("menu:{t}"))).collect();
+        for pair in titles.windows(2) {
+            let gap = pair[1].left() - pair[0].right();
+            assert!(gap >= 24.0 - 0.5, "headings {:?} and {:?} are only {gap} px apart", pair[0], pair[1]);
+        }
+    }
+
+    /// A backup the host refuses (changes still unsaved, issue #1508) says why when started from
+    /// the menu, as a refused export does; the refusal used to reach only the control channel.
+    #[test]
+    fn a_refused_backup_from_the_menu_shows_why() {
+        // the host refuses, as the web one does while changes are still unsaved (issue #1508)
+        let refusal = "Backup not started: 1 change could not be saved to browser storage yet";
+        let services = crate::Services {
+            backup_library: Some(Box::new(move |_: &mut lightcraft_engine::Session| Err(refusal.to_string()))),
+            ..Default::default()
+        };
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+        let mut h = crate::headless::Headless::new(app, [1400.0, 900.0], 1.0);
+        let t = std::time::Duration::from_secs(30);
+        h.settle(t);
+        for id in ["menu:File", "menuitem:file.backupLibrary"] {
+            let r = h.request("ui.clickWidget", json!({"id": id}), t);
+            assert_eq!(r["ok"], true, "{id}: {r}");
+            h.step();
+        }
+        // (read at once: a toast keeps the UI repainting until it expires, so settling would outlive it)
+        let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(toast.contains(refusal), "the refusal is shown: {toast:?}");
     }
 
     /// #1528: `file.findMissing` with `wait: true` must propagate folder validation and search

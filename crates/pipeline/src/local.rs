@@ -227,20 +227,45 @@ fn median_row(src: &[f32], out: &mut [f32], r: usize) {
     if n == 0 {
         return;
     }
-    let at = |i: isize| src[i.clamp(0, n as isize - 1) as usize];
+    let at = |i: isize| total_key(src[i.clamp(0, n as isize - 1) as usize]);
     let r_ = r as isize;
-    let mut win: Vec<f32> = (-r_..=r_).map(at).collect();
-    win.sort_unstable_by(f32::total_cmp);
+    let mut win: Vec<i32> = (-r_..=r_).map(at).collect();
+    win.sort_unstable();
     for (x, o) in out.iter_mut().enumerate() {
-        *o = win[r];
+        *o = f32::from_bits(total_key_inv(win[r]));
         let (old, new) = (at(x as isize - r_), at(x as isize + r_ + 1));
-        if old.to_bits() != new.to_bits() {
-            let i = win.binary_search_by(|v| v.total_cmp(&old)).unwrap_or_else(|i| i.min(win.len() - 1));
-            win.remove(i);
-            let j = win.binary_search_by(|v| v.total_cmp(&new)).unwrap_or_else(|j| j);
-            win.insert(j, new);
+        if old != new {
+            // Ranks by counting the smaller keys in one branch-free pass the compiler vectorizes.
+            // Binary searches here mispredicted on most steps and, with `remove` + `insert`, cost
+            // 2.4 s per 24 MP at r = 9 on one core.
+            let (mut i, mut j) = (0u32, 0u32);
+            for &v in &win {
+                i += u32::from(v < old);
+                j += u32::from(v < new);
+            }
+            let (i, j) = (i as usize, j as usize);
+            // `old` sits at `i`; shift the keys between the two ranks by one over it
+            if j > i {
+                win.copy_within(i + 1..j, i);
+                win[j - 1] = new;
+            } else {
+                win.copy_within(j..i, j + 1);
+                win[j] = new;
+            }
         }
     }
+}
+
+/// `v`'s bits as an `i32` that orders like [`f32::total_cmp`] (the same transform it applies), so
+/// equal keys are equal bits.
+fn total_key(v: f32) -> i32 {
+    let b = v.to_bits() as i32;
+    b ^ (((b >> 31) as u32) >> 1) as i32
+}
+
+/// The bits [`total_key`] came from (the transform is its own inverse: it keeps the sign bit).
+fn total_key_inv(k: i32) -> u32 {
+    (k ^ (((k >> 31) as u32) >> 1) as i32) as u32
 }
 
 fn transpose(p: &Plane) -> Plane {
@@ -490,9 +515,13 @@ pub struct PlaneSigmas {
 
 pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneSigmas {
     let ppl = px_per_long as f32;
-    let local_any = |f: fn(&lightcraft_develop::LocalAdjustments) -> f64| s.masks.iter().any(|m| f(&m.adjust) != 0.0);
-    let tone_active =
-        s.light.highlights != 0.0 || s.light.shadows != 0.0 || s.masks.iter().any(|m| m.adjust.highlights != 0.0 || m.adjust.shadows != 0.0);
+    // A hidden mask, or one with no components, does not change the picture. Its sliders must
+    // not pick the tone base Clarity reads (#1214).
+    let live = |m: &&lightcraft_develop::Mask| m.visible && !m.components.is_empty();
+    let local_any = |f: fn(&lightcraft_develop::LocalAdjustments) -> f64| s.masks.iter().filter(live).any(|m| f(&m.adjust) != 0.0);
+    let tone_active = s.light.highlights != 0.0
+        || s.light.shadows != 0.0
+        || s.masks.iter().filter(live).any(|m| m.adjust.highlights != 0.0 || m.adjust.shadows != 0.0);
     // Edge-aware base at ~1.5% of the long edge (EV² epsilon: edges of > ~0.6 EV are preserved)
     // From V2 it is taken of the median at 0.15%: lines and texture finer than that are detail,
     // not tone (#632).
@@ -507,10 +536,10 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
         || local_any(|a| a.texture)
         || local_any(|a| a.sharpness)
         || local_any(|a| a.noise)
-        || s.masks.iter().any(|m| m.adjust.defringe > 0.0))
+        || s.masks.iter().filter(live).any(|m| m.adjust.defringe > 0.0))
     .then(|| (0.0018 * ppl).max(0.6));
     let dark = (s.effects.dehaze != 0.0 || local_any(|a| a.dehaze)).then(|| (0.02 * ppl).max(1.0));
-    let chroma = (local_any(|a| a.moire) || s.masks.iter().any(|m| m.adjust.noise > 0.0)).then(|| (CHROMA_SIGMA * ppl).max(1.0));
+    let chroma = (local_any(|a| a.moire) || s.masks.iter().filter(live).any(|m| m.adjust.noise > 0.0)).then(|| (CHROMA_SIGMA * ppl).max(1.0));
     let base_detail = if base.is_some() { tone_base_detail(s, px_per_long) } else { 0 };
     PlaneSigmas { base, base_detail, clarity, texture, dark, chroma }
 }
@@ -687,6 +716,32 @@ mod tests {
         cropped.crop.rect.x1 = 0.5;
         assert_ne!(fresh(&hazy, &cropped), fresh(&hazy, &frame));
         assert_eq!(frame_airlight(&hazy, &info, &s, &cropped, 48, 32).to_bits(), fresh(&hazy, &cropped).to_bits());
+    }
+
+    #[test]
+    fn a_hidden_or_empty_mask_does_not_request_the_tone_base() {
+        use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape};
+        use lightcraft_geom::Point;
+        let shape = MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(1.0, 0.0) };
+        let component = MaskComponent { name: None, op: MaskOp::Add, invert: false, shape };
+        let mut s = DevelopSettings::default();
+        s.masks.push(Mask {
+            visible: false,
+            components: vec![component],
+            adjust: lightcraft_develop::LocalAdjustments { highlights: 40.0, ..Default::default() },
+            ..Default::default()
+        });
+        assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_none());
+        s.masks[0].visible = true;
+        s.masks[0].components.clear();
+        assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_none());
+        s.masks[0].components.push(MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(1.0, 0.0) },
+        });
+        assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_some());
     }
 
     #[test]

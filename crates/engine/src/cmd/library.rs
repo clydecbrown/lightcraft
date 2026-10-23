@@ -145,10 +145,6 @@ fn strs(p: &Value, key: &str) -> Vec<String> {
     p.get(key).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
 }
 
-fn ids_param(p: &Value) -> Option<Vec<PhotoId>> {
-    p.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(PhotoId).collect())
-}
-
 /// The targets an album can hold and how many were browsed (Local) photos, which album views
 /// never show (issue #684): those are skipped, and reported, instead of becoming invisible members.
 fn album_targets(s: &Session, targets: Vec<PhotoId>) -> (Vec<PhotoId>, usize) {
@@ -430,6 +426,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Err(bad("library.filter", problems.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ")));
                 }
                 s.filter = f;
+                s.shelved_filter = None;
                 Ok(json!({"count": s.visible().len()}))
             }
         ),
@@ -473,6 +470,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 if s.filter.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path)) {
                     s.filter.library_folder = None;
                 }
+                // a filter put aside by Enable Filters must not bring the removed folder back
+                if let Some(f) = s.shelved_filter.as_mut()
+                    && f.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path))
+                {
+                    f.library_folder = None;
+                }
+                if s.shelved_filter.as_ref() == Some(&Filter::default()) {
+                    s.shelved_filter = None;
+                }
                 // the folder being shown is gone: back to everything, as for a deleted album
                 if s.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path)) {
                     s.library_folder = None;
@@ -514,8 +520,30 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("library.clearFilter", "Clear Filters", ["View"], None, "{}", always, |s, _| {
             s.filter = Default::default();
+            s.shelved_filter = None;
             Ok(json!({"count": s.visible().len()}))
         }),
+        // Classic: Library > Enable Filters (Cmd+L) switches the filter off and on again as it was
+        cmd!(
+            "library.toggleFilters",
+            "Enable Filters",
+            ["View"],
+            Some("Cmd+L"),
+            "{} — with a filter set, puts it aside and shows everything; with one put aside, brings it back as it was (stars, flag, text… together). Setting or clearing a filter while it is off forgets the one put aside → {enabled, count}",
+            always,
+            |s, _| {
+                if s.filter != Filter::default() {
+                    s.shelved_filter = Some(std::mem::take(&mut s.filter));
+                } else if let Some(mut f) = s.shelved_filter.take() {
+                    // one folder at a time: the folder shown now wins over the one the filter had
+                    if s.source == LibrarySource::LibraryFolder {
+                        f.library_folder = None;
+                    }
+                    s.filter = f;
+                }
+                Ok(json!({"enabled": s.shelved_filter.is_none(), "count": s.visible().len()}))
+            }
+        ),
         cmd!(
             "library.sort",
             "Sort",
@@ -623,7 +651,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{ids: [id], active?: id, mode?: replace|add|toggle|range} — every id must be a photo of the library",
             always,
             |s, p| {
-                let ids = ids_param(p).unwrap_or_default();
+                let ids = super::photo_ids(p, "library.select")?.unwrap_or_default();
                 let active = p.get("active").and_then(Value::as_u64).map(PhotoId);
                 let mode = str_param(p, "mode").unwrap_or("replace");
                 // An id that is not in the library is an error, and the selection stays as it was:
@@ -808,9 +836,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "{label: red|yellow|green|blue|purple|none, ids?}",
             has_selection,
             |s, p| {
-                let l = match str_param(p, "label") {
-                    None | Some("none") => None,
-                    Some(x) => Some(ColorLabel::parse(x).ok_or_else(|| bad("photo.label", "unknown label"))?),
+                // `none` (or null) clears; a missing label or one that isn't text is an error, not a clear
+                let l = match p.get("label") {
+                    Some(Value::Null) => None,
+                    Some(Value::String(x)) if x == "none" => None,
+                    Some(Value::String(x)) => Some(ColorLabel::parse(x).ok_or_else(|| bad("photo.label", "unknown label"))?),
+                    None => return Err(bad("photo.label", "missing `label` (red|yellow|green|blue|purple|none)")),
+                    Some(_) => return Err(bad("photo.label", "label must be red|yellow|green|blue|purple|none")),
                 };
                 for_targets(s, p, "Set Color Label", |id| Some(Op::SetLabel { id, label: l }))
             }
@@ -829,8 +861,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id?, index} — remove one face / pet region (by its position in the photo's regions) from the photo in the catalog; undoable. The XMP sidecar is never rewritten for this, even with auto-write on, so reading the metadata from the file brings the region back",
             always,
             |s, p| {
-                let id =
-                    p.get("id").and_then(Value::as_u64).map(PhotoId).or_else(|| s.active()).ok_or_else(|| bad("photo.removeRegion", "no photo"))?;
+                let id = super::photo_id(p, "photo.removeRegion")?.or_else(|| s.active()).ok_or_else(|| bad("photo.removeRegion", "no photo"))?;
                 let index = p
                     .get("index")
                     .and_then(Value::as_u64)
@@ -856,7 +887,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 const C: &str = "photo.setRegion";
                 // a drag is one undo step however many frames it took: the caller commits once, on release
-                let id = p.get("id").and_then(Value::as_u64).map(PhotoId).or_else(|| s.active()).ok_or_else(|| bad(C, "no photo"))?;
+                let id = super::photo_id(p, C)?.or_else(|| s.active()).ok_or_else(|| bad(C, "no photo"))?;
                 let index = p
                     .get("index")
                     .and_then(Value::as_u64)
@@ -1267,7 +1298,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_library_selection,
             |s, p| {
                 let id = album_param(p, "id", "album.addPhotos")?;
-                let targets = ids_param(p).unwrap_or_else(|| s.selected());
+                let targets = super::photo_ids(p, "album.addPhotos")?.unwrap_or_else(|| s.selected());
                 let al = s.catalog.album(id).ok_or_else(|| bad("album.addPhotos", "no such album"))?;
                 if al.is_smart() || al.folder {
                     return Err(bad("album.addPhotos", "smart albums and folders can't hold photos"));
@@ -1296,7 +1327,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "{ids?} — B: adds the photos to the target album (the Quick Collection unless one is set), or removes them when they're all in it → {album, added, skipped}; Local photos are skipped",
             has_library_selection,
             |s, p| {
-                let targets = album_targets_or_err(s, "album.toggleTarget", ids_param(p).unwrap_or_else(|| s.selected()))?;
+                let targets =
+                    album_targets_or_err(s, "album.toggleTarget", super::photo_ids(p, "album.toggleTarget")?.unwrap_or_else(|| s.selected()))?;
                 let (targets, skipped) = targets;
                 let target = s.target_album.filter(|a| s.catalog.album(*a).is_some_and(|al| !al.is_smart() && !al.folder));
                 let id = match target.or_else(|| s.catalog.quick_collection()) {
@@ -1458,7 +1490,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         _ => return Err(bad("album.removePhotos", "no album: pass `id` or show an album")),
                     },
                 };
-                let targets = ids_param(p).unwrap_or_else(|| s.selected());
+                let targets = super::photo_ids(p, "album.removePhotos")?.unwrap_or_else(|| s.selected());
                 let al = s.catalog.album(id).ok_or_else(|| bad("album.removePhotos", "no such album"))?;
                 if al.is_smart() {
                     return Err(bad("album.removePhotos", "smart albums update automatically: change their rules"));
@@ -1488,7 +1520,7 @@ pub fn specs() -> Vec<CommandSpec> {
         always, |_, p| {
             let path = str_param(p,"path").ok_or_else(|| bad("library.inspectLightroom","missing path"))?;
             let data = crate::lightroom_catalog::read(std::path::Path::new(path)).map_err(|e| bad("library.inspectLightroom",e))?;
-            Ok(json!({"photos":data.photos.len(),"collections":data.collections.iter().filter(|r|r.get("systemOnly").and_then(Value::as_f64).unwrap_or(0.0)==0.0).count(),"missing":data.photos.iter().filter(|p| !p.original_is_file()).map(|p|&p.path).collect::<Vec<_>>(),"warnings":data.warnings}))
+            Ok(json!({"photos":data.photos.len(),"collections":data.collections.iter().filter(|r|r.get("systemOnly").and_then(Value::as_f64).unwrap_or(0.0)==0.0).count(),"missing":data.photos.iter().filter(|p| !p.original_is_file()).map(|p|&p.path).collect::<Vec<_>>(),"warnings":data.warnings,"skipped":data.skipped}))
         }),
         cmd!(
             "library.importLightroom",
@@ -1709,12 +1741,21 @@ fn has_library(s: &Session) -> std::result::Result<(), String> {
 /// Coordinates typed by a person: "51.5072, -0.1276", "51.5072 N 0.1276 W",
 /// "51°30'26\"N 0°7'39\"W" (degrees, minutes, seconds; N/S/E/W or signs).
 pub(crate) fn parse_gps(t: &str) -> Option<(f64, f64)> {
+    // typographic minus signs and dashes mean a negative value, like ASCII '-'
+    let t = t.replace(['\u{2212}', '\u{2012}', '\u{2013}', '\u{FE63}', '\u{FF0D}'], "-");
     let t = t.trim();
     // split into the two coordinates: at a comma, else after the first N/S hemisphere letter
     let (a, b) = match t.split_once(',') {
         Some((a, b)) => (a.trim().to_string(), b.trim().to_string()),
         None => {
-            let i = t.find(['N', 'S', 'n', 's']).map(|i| i + 1).or_else(|| t.find(char::is_whitespace))?;
+            let lead = t.starts_with(['N', 'S', 'n', 's']);
+            let i = if lead {
+                // hemisphere letter first: "N 51.5 W 0.1" splits at the E/W letter
+                t.char_indices().skip(1).find(|(_, c)| matches!(c, 'E' | 'W' | 'e' | 'w')).map(|(i, _)| i)
+            } else {
+                t.find(['N', 'S', 'n', 's']).map(|i| i + 1)
+            }
+            .or_else(|| t.find(char::is_whitespace))?;
             (t[..i].trim().to_string(), t[i..].trim().to_string())
         }
     };
@@ -1746,6 +1787,10 @@ mod gps_tests {
         assert!((la - 51.50722).abs() < 1e-4 && (lo + 0.1275).abs() < 1e-4, "{la} {lo}");
         let (la, lo) = p("33.8688 S, 151.2093 E").unwrap();
         assert!((la + 33.8688).abs() < 1e-9 && (lo - 151.2093).abs() < 1e-9);
+        assert_eq!(p("51.5 N 0.1 W"), Some((51.5, -0.1)));
+        assert_eq!(p("N 51.5072 W 0.1276"), Some((51.5072, -0.1276)));
+        assert_eq!(p("S 33.8688 E 151.2093"), Some((-33.8688, 151.2093)));
+        assert_eq!(p("\u{2212}33.8688, 151.2093"), Some((-33.8688, 151.2093)));
         assert_eq!(p("95, 10"), None);
         assert_eq!(p("hello"), None);
     }
@@ -1758,3 +1803,7 @@ mod relative_rating_tests;
 #[cfg(test)]
 #[path = "library/tests_flag_cycle.rs"]
 mod flag_cycle_tests;
+
+#[cfg(test)]
+#[path = "library/tests_enable_filters.rs"]
+mod enable_filters_tests;
