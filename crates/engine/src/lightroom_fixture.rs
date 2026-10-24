@@ -125,6 +125,17 @@ pub(crate) fn one_photo(originals: &Path, settings: &str) -> Vec<Table> {
     ]
 }
 
+/// The format header an import archive starts with (`lightroom_archive`'s), before its zlib-compressed JSON.
+pub(crate) const ARCHIVE_HEADER: &[u8] = b"LC-LRARCH\0\x01Z";
+
+/// The JSON the import archive at `path` holds, for tests that check what an import kept. The JSON itself is capped
+/// at 32 MiB too, so that is the most it can inflate to.
+pub(crate) fn read_archive(path: &Path) -> serde_json::Value {
+    let bytes = std::fs::read(path).unwrap();
+    let json = bytes.strip_prefix(ARCHIVE_HEADER).unwrap_or_else(|| panic!("{} is not an import archive", path.display()));
+    serde_json::from_slice(&miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(json, 32 << 20).unwrap()).unwrap()
+}
+
 /// A new, empty folder for one test's catalog.
 pub(crate) fn dir(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("lightcraft-lrcat-{tag}-{}", std::process::id()));

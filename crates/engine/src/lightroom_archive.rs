@@ -567,16 +567,6 @@ impl Serialize for RowRef<'_> {
     }
 }
 
-/// The JSON an archive at `path` holds, for tests that check what an import kept. The JSON itself is capped at
-/// [`MAX_ARCHIVE_BYTES`] too, so that is the most it can inflate to.
-#[cfg(test)]
-pub(crate) fn read_back(path: &Path) -> Value {
-    let bytes = fs::read(path).unwrap();
-    assert!(bytes.starts_with(HEADER), "{} is not an import archive", path.display());
-    let json = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&bytes[HEADER.len()..], MAX_ARCHIVE_BYTES as usize).unwrap();
-    serde_json::from_slice(&json).unwrap()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -715,7 +705,7 @@ mod tests {
         let path = tempdir();
         let kept = store_best_effort(&path, &large_catalog(true)).unwrap();
         let Kept::WithoutSettings(archive) = kept else { panic!("the archive should be kept without settings, not {kept:?}") };
-        let decoded = read_back(&archive);
+        let decoded = crate::lightroom_fixture::read_archive(&archive);
         let photos = decoded["photos"].as_array().unwrap();
         assert_eq!(photos.len(), 5_000, "every photo is still archived");
         assert_eq!(photos[7]["uuid"], serde_json::json!("photo-7"));
@@ -756,6 +746,7 @@ mod tests {
         let archive = store(&path, &rich_data()).unwrap();
         let bytes = fs::read(archive).unwrap();
         assert!(bytes.starts_with(HEADER));
+        assert_eq!(crate::lightroom_fixture::ARCHIVE_HEADER, HEADER, "the fixture reads archives with this module's header");
         let json = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&bytes[HEADER.len()..], MAX_ARCHIVE_BYTES as usize).unwrap();
         let decoded: Value = serde_json::from_slice(&json).unwrap();
         assert_eq!(decoded["version"], serde_json::json!(FORMAT_VERSION));

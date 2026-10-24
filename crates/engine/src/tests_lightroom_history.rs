@@ -17,7 +17,7 @@ fn archive(tag: &str, extra: Vec<Table>) -> Value {
     fixture::write(&catalog, &tables);
     let data = crate::lightroom_catalog::read(&catalog).unwrap();
     let stored = crate::lightroom_archive::store(&dir.join("Interop"), &data).unwrap();
-    let archived = crate::lightroom_archive::read_back(&stored);
+    let archived = fixture::read_archive(&stored);
     let _ = std::fs::remove_dir_all(dir);
     archived
 }
