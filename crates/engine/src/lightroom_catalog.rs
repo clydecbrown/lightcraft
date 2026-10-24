@@ -68,9 +68,10 @@ impl Reader {
         self.table_within(name, required, MAX_DECODED_SETTINGS, warnings)
     }
 
-    /// The rows of table `name`. Its compressed settings column ([`compressed_settings`]) is decoded while the decoded
-    /// total stays within `budget` bytes; a value that can't be decoded is left out of its row with a warning naming
-    /// the image, and those past the budget with one warning for all. Other BLOB columns are always left out.
+    /// The rows of table `name`. Its compressed settings column ([`compressed_settings`]) is decoded within `budget`
+    /// bytes for the whole table: each value is charged its declared length before it is inflated, even one that then
+    /// fails to decode. A value that can't be decoded is left out of its row with a warning naming the image, and
+    /// those past the budget with one warning for all. Other BLOB columns are always left out.
     fn table_within(&self, name: &str, required: bool, budget: usize, warnings: &mut Vec<String>) -> Result<Vec<Row>, String> {
         let Some(t) = self.tables.iter().find(|t| t.name == name) else {
             return if required { Err(format!("unsupported Lightroom catalog: missing {name}")) } else { Ok(Vec::new()) };
@@ -104,18 +105,23 @@ impl Reader {
                 row.insert(column.clone(), value);
             }
             if let (Some((column, bytes)), Some((_, what, _))) = (settings, compressed) {
-                // past the budget, the rest aren't inflated at all
-                match if over_budget > 0 { Ok(None) } else { decode_compressed(&bytes, "settings").map(Some) } {
-                    Ok(Some(text)) if text.len() <= left => {
-                        left -= text.len();
-                        row.insert(column.clone(), Value::String(text));
+                // charged at its declared length before it is inflated (which never goes past that length), so
+                // a row that then fails to decode counts too; past the budget, the rest aren't inflated at all
+                let declared = compressed_len(&bytes);
+                if declared.is_some_and(|n| over_budget > 0 || n > left) {
+                    over_budget += 1;
+                } else {
+                    left -= declared.unwrap_or(0);
+                    match decode_compressed(&bytes, "settings") {
+                        Ok(text) => {
+                            row.insert(column.clone(), Value::String(text));
+                        }
+                        Err(why) => warnings.push(format!(
+                            "image {}: {what} {}: {why}; archived without its settings",
+                            number(&row, "image"),
+                            number(&row, "id_local")
+                        )),
                     }
-                    Ok(_) => over_budget += 1,
-                    Err(why) => warnings.push(format!(
-                        "image {}: {what} {}: {why}; archived without its settings",
-                        number(&row, "image"),
-                        number(&row, "id_local")
-                    )),
                 }
             }
             out.push(row);
@@ -372,17 +378,24 @@ fn xmp(v: Option<&Value>) -> Result<String, String> {
     }
 }
 
+/// The decoded length [`decode_compressed`] reads from `bytes`' header, when it has one of at most 16 MiB.
+fn compressed_len(bytes: &[u8]) -> Option<usize> {
+    let size = bytes.get(..4).and_then(|s| <[u8; 4]>::try_from(s).ok()).map(u32::from_be_bytes)?;
+    usize::try_from(size).ok().filter(|size| *size <= 16 << 20)
+}
+
 /// Lightroom's compressed text (`Adobe_AdditionalMetadata.xmp`, and history-step and snapshot settings since Lightroom
 /// Classic 13): the decoded length as 4 big-endian bytes, then a zlib stream, at most 16 MiB decoded. Errors name it
 /// `what`.
 fn decode_compressed(bytes: &[u8], what: &str) -> Result<String, String> {
-    let size = bytes.get(..4).and_then(|s| <[u8; 4]>::try_from(s).ok()).map(u32::from_be_bytes).ok_or_else(|| format!("truncated {what} header"))?;
-    if size > 16 << 20 {
-        return Err(format!("{what} longer than 16 MiB"));
+    if bytes.len() < 4 {
+        return Err(format!("truncated {what} header"));
     }
-    let decoded = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(bytes.get(4..).ok_or_else(|| format!("truncated {what}"))?, 16 << 20)
+    let size = compressed_len(bytes).ok_or_else(|| format!("{what} longer than 16 MiB"))?;
+    // inflated no further than its declared length: a stream that goes on is invalid, at no more cost than a valid one
+    let decoded = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(bytes.get(4..).ok_or_else(|| format!("truncated {what}"))?, size)
         .map_err(|_| format!("invalid compressed {what}"))?;
-    if decoded.len() != size as usize {
+    if decoded.len() != size {
         return Err(format!("{what} length mismatch"));
     }
     String::from_utf8(decoded).map_err(|e| format!("{what} not UTF-8: {e}"))
@@ -1214,6 +1227,45 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(dir);
     }
+    /// A stream that inflates past the length its header declares is stopped there, not inflated up to 16 MiB first.
+    #[test]
+    fn a_stream_longer_than_its_declared_length_is_stopped_at_that_length() {
+        let mut bytes = 10u32.to_be_bytes().to_vec();
+        bytes.extend(miniz_oxide::deflate::compress_to_vec_zlib(&[b'x'; 1024], 6));
+        assert_eq!(decode_compressed(&bytes, "settings"), Err("invalid compressed settings".to_string()));
+        let mut exact = 1024u32.to_be_bytes().to_vec();
+        exact.extend(miniz_oxide::deflate::compress_to_vec_zlib(&[b'x'; 1024], 6));
+        assert_eq!(decode_compressed(&exact, "settings").map(|text| text.len()), Ok(1024), "exactly its length decodes");
+    }
+
+    /// Settings that fail to decode still cost their declared length, so a catalog of damaged rows can't make the
+    /// reader inflate without bound: past the budget, the rest are left out without being inflated.
+    #[test]
+    fn settings_that_fail_to_decode_still_count_against_the_budget() {
+        use crate::lightroom_fixture::{self as fixture, Field, Table};
+        let dir = fixture::dir("history-budget-bad");
+        let catalog = dir.join("test.lrcat");
+        let mut damaged = (512u32 << 10).to_be_bytes().to_vec();
+        damaged.extend([1, 2, 3]);
+        let rows = (1..=4).map(|id| fixture::history_step(id, 1, id as f64, "Step", Field::Blob(damaged.clone()))).collect();
+        fixture::write(&catalog, &[Table { name: "Adobe_libraryImageDevelopHistoryStep", columns: fixture::HISTORY_COLUMNS, rows }]);
+        let db = Database::open_file_with_wal(FileSource::open(&catalog).unwrap(), &[]).unwrap();
+        let reader = Reader { tables: db.live_tables().unwrap(), db };
+        let mut warnings = Vec::new();
+        let rows = reader.table_within("Adobe_libraryImageDevelopHistoryStep", true, 1 << 20, &mut warnings).unwrap();
+        assert_eq!(rows.len(), 4, "every step is still read");
+        assert_eq!(
+            warnings,
+            [
+                "image 1: history step 1: invalid compressed settings; archived without its settings",
+                "image 1: history step 2: invalid compressed settings; archived without its settings",
+                "2 history steps archived without their settings: more than 1 MiB of settings in Adobe_libraryImageDevelopHistoryStep",
+            ],
+            "the two damaged steps within 1 MiB are tried; the other two aren't"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// A crafted `.lrcat` that names a program as a photo's original gets no record for it, so
     /// Photo ▸ Edit In ▸ Open Original has nothing to hand the system opener (#2135). Its virtual
     /// copies go with it; the catalog's real photos still import.
