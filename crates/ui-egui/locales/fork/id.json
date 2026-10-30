@@ -41,5 +41,7 @@
   "Raw files and generated photos can only be edited as a copy with adjustments.": "File raw hanya dapat diedit sebagai salinan dengan penyesuaian.",
   "File format, colour space and bit depth: Settings → External Editing.": "Format file, ruang warna, dan kedalaman bit: Pengaturan → Pengeditan eksternal.",
   "Settings → External Editing → Edit In turns the question back on": "Pengaturan → Pengeditan eksternal → Edit di mengaktifkan pertanyaan lagi",
-  "Indexing photos": "Mengindeks foto"
+  "Indexing photos": "Mengindeks foto",
+  "No supported photos found in this folder.": "Tidak ada foto yang didukung ditemukan di folder ini.",
+  "Include subfolders": "Sertakan subfolder"
 }

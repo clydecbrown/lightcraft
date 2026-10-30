@@ -256,6 +256,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.pasteSettings", "Paste Selected Settings…", Some("Cmd+Shift+V"), "Photo>Develop Settings"),
     ("dialog.syncSettings", "Sync Settings…", Some("Cmd+Shift+S"), "Photo>Develop Settings"),
     ("view.focusSearch", "Find…", Some("Cmd+F"), "Library"),
+    ("dialog.import", "Import…", Some("Cmd+Shift+I"), "File"),
     ("dialog.export", "Export…", None, "File"),
     ("dialog.print", "Print…", Some("Cmd+P"), "File"),
     ("app.print", "Print to PDF", None, ""),
@@ -277,7 +278,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("merge.panoramaLast", "Panorama with Last Settings", Some("Ctrl+Shift+M"), "Photo>Photo Merge"),
     ("merge.hdrPanoramaLast", "HDR Panorama with Last Settings", None, "Photo>Photo Merge"),
     ("merge.focusStackLast", "Focus Stack with Last Settings", None, "Photo>Photo Merge"),
-    ("file.addPhotos", "Import Photos…", Some("Cmd+Shift+I"), "File"),
+    ("file.addPhotos", "Import Photos…", None, "File"),
     ("file.addFolder", "Import from Folder…", None, "File"),
     // {path?, into?: open | new, name?, location?}: asks where the catalog goes unless `into` (or
     // Settings) says (#2672, `lightroom_destination`)
@@ -2032,6 +2033,28 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             let path = p.get("path").and_then(Value::as_str)?;
             crate::import::browse(app, path, p.get("subfolders").and_then(Value::as_bool))
         }
+        "dialog.import" => {
+            if crate::lightroom_import::is_running(app) {
+                return Some(Err("finish Lightroom catalog import before adding photos".into()));
+            }
+            if let Some(path) = p.get("path").and_then(Value::as_str) {
+                let subfolders = p.get("subfolders").and_then(Value::as_bool).unwrap_or(true);
+                let r = crate::import::open_with_subfolders(app, vec![path.to_string()], subfolders);
+                return Some(import_into_album(app, p, r));
+            }
+            if let Some(paths) = p.get("paths").and_then(Value::as_array) {
+                let paths: Vec<String> = paths.iter().filter_map(Value::as_str).map(str::to_string).collect();
+                if !paths.is_empty() {
+                    let subfolders = p.get("subfolders").and_then(Value::as_bool).unwrap_or(true);
+                    let r = crate::import::open_with_subfolders(app, paths, subfolders);
+                    return Some(import_into_album(app, p, r));
+                }
+            }
+            if !matches!(app.ui.dialog, Some(Dialog::Import { .. })) {
+                app.ui.dialog = Some(Dialog::Import { opts: Box::new(crate::import::ImportDialog::empty()) });
+            }
+            Ok(Value::Null)
+        }
         "file.addPhotos" => {
             if crate::lightroom_import::is_running(app) {
                 return Some(Err("finish Lightroom catalog import before adding photos".into()));
@@ -2050,7 +2073,8 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
                 return Some(Ok(Value::Null));
             }
             // review first: the import dialog lists what was found
-            let r = crate::import::open(app, paths);
+            let subfolders = p.get("subfolders").and_then(Value::as_bool).unwrap_or(true);
+            let r = crate::import::open_with_subfolders(app, paths, subfolders);
             import_into_album(app, p, r)
         }
         "file.importLightroom" => {
@@ -2294,7 +2318,8 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             };
             match path {
                 Some(path) => {
-                    let r = crate::import::open(app, vec![path]);
+                    let subfolders = p.get("subfolders").and_then(Value::as_bool).unwrap_or(true);
+                    let r = crate::import::open_with_subfolders(app, vec![path], subfolders);
                     import_into_album(app, p, r)
                 }
                 None => Ok(Value::Null),
@@ -2897,6 +2922,7 @@ pub fn ui_enabled(app: &LccApp, id: &str) -> bool {
         "view.compare" => app.session.catalog.len() > 1,
         "view.fullScreenPreview" | "view.infoOverlay" | "view.navigator" => app.session.active().is_some() || app.ui.fullscreen,
         "app.openLibrary" | "app.newLibrary" => app.services.pick_folder.is_some() && crate::panels::settings::can_switch_library(app).is_ok(),
+        "dialog.import" => !crate::lightroom_import::is_running(app),
         "file.addFolder" => (app.services.pick_folder.is_some() || app.services.picker.is_some()) && !crate::lightroom_import::is_running(app),
         "file.backupLibrary" => app.services.backup_library.is_some(),
         "app.openLogFolder" => app.services.reveal.is_some() && app.services.log_file.is_some(),

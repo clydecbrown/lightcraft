@@ -40,5 +40,7 @@
   "Raw files and generated photos can only be edited as a copy with adjustments.": "Raw-tiedostoja voi muokata vain säädetyn kopion kautta.",
   "File format, colour space and bit depth: Settings → External Editing.": "Tiedostomuoto, väriavaruus ja bittisyvyys: Asetukset → Ulkoinen muokkaus.",
   "Settings → External Editing → Edit In turns the question back on": "Asetukset → Ulkoinen muokkaus → Muokkaa ohjelmassa ottaa kysymyksen taas käyttöön",
-  "Indexing photos": "Indeksoidaan kuvia"
+  "Indexing photos": "Indeksoidaan kuvia",
+  "No supported photos found in this folder.": "Tästä kansiosta ei löytynyt tuettuja kuvia.",
+  "Include subfolders": "Sisällytä alikansiot"
 }

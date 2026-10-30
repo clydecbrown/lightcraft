@@ -43,7 +43,7 @@ pub fn hint(keymap: &Keymap, mac: bool) -> String {
     } else {
         crate::i18n::tr("or drop photos and folders into this window")
     };
-    match crate::shortcuts::shortcut_of(keymap, "file.addPhotos") {
+    match crate::shortcuts::shortcut_of(keymap, "dialog.import").or_else(|| crate::shortcuts::shortcut_of(keymap, "file.addPhotos")) {
         Some(sc) => format!("{drop} · {}", crate::menubar::shortcut_text(sc, mac)),
         None => drop.to_string(),
     }

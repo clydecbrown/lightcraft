@@ -24,8 +24,8 @@ fn write_png(path: &Path, seed: u8) {
     let bytes = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &lcc_codecs::EncodeMeta::default()).unwrap();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, bytes).unwrap();
-    // undated files take the file's date: the tests' clock time (2026-01-14T05:58:48)
-    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_768_370_328);
+    // undated files take the file's date: noon UTC, 14 January in every zone the tests run in
+    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_768_392_000);
     std::fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
 }
 
@@ -53,7 +53,7 @@ fn write_png_with_metadata(path: &Path, seed: u8, exif: Option<&[u8]>, xmp: Opti
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, bytes).unwrap();
     // Keep the same known file-date fallback as write_png, distinct from the regression timestamp.
-    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_768_370_328);
+    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_768_392_000);
     std::fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
 }
 
@@ -85,6 +85,72 @@ fn recursive_discovery_includes_sony_sr2_and_srf_case_insensitively() {
     assert_eq!(found, slashes(expected.clone()));
     assert_eq!(slashes(crate::import::expand(&expected, None)), slashes(expected.clone()), "folder and direct discovery agree");
     std::fs::remove_dir_all(src).unwrap();
+}
+
+#[test]
+fn expand_report_subfolders_respects_inclusion_flag() {
+    let src = temp_dir("subfolder-discovery");
+    let nested = src.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    let root_file = src.join("root.jpg");
+    let nested_file = nested.join("nested.jpg");
+    let unsupported_file = src.join("notes.txt");
+    let sidecar_file = src.join("root.xmp");
+
+    std::fs::write(&root_file, b"test-root-content").unwrap();
+    std::fs::write(&nested_file, b"test-nested-content").unwrap();
+    std::fs::write(&unsupported_file, b"not an image").unwrap();
+    std::fs::write(&sidecar_file, b"<xmp></xmp>").unwrap();
+
+    let src_str = src.to_string_lossy().to_string();
+
+    let slashes = |v: Vec<String>| {
+        let mut v: Vec<String> = v.into_iter().map(|p| p.replace('\\', "/")).collect();
+        v.sort();
+        v
+    };
+    let root_norm = root_file.to_string_lossy().replace('\\', "/");
+    let nested_norm = nested_file.to_string_lossy().replace('\\', "/");
+
+    // With subfolders: true -> both root and nested photos are discovered
+    let with_sub = crate::import::expand_report_subfolders(std::slice::from_ref(&src_str), None, crate::walk::Limits::default(), true);
+    let files_with_sub = slashes(with_sub.files);
+    assert!(files_with_sub.contains(&root_norm));
+    assert!(files_with_sub.contains(&nested_norm));
+    assert_eq!(files_with_sub.len(), 2);
+
+    // With subfolders: false -> only root photo is discovered; nested directory is excluded
+    let without_sub = crate::import::expand_report_subfolders(std::slice::from_ref(&src_str), None, crate::walk::Limits::default(), false);
+    let files_without_sub = slashes(without_sub.files);
+    assert_eq!(files_without_sub, vec![root_norm]);
+    assert_eq!(without_sub.unsupported, 1, "notes.txt counted as unsupported, sidecar is ignored");
+
+    let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
+fn expand_report_subfolders_honours_skip_in_non_recursive_mode() {
+    let src = temp_dir("subfolder-skip");
+    let lib = src.join("Library");
+    std::fs::create_dir_all(&lib).unwrap();
+    let img_root = src.join("root.jpg");
+    let img_lib = lib.join("ignored.jpg");
+    std::fs::write(&img_root, b"root").unwrap();
+    std::fs::write(&img_lib, b"lib").unwrap();
+
+    let src_str = src.to_string_lossy().to_string();
+
+    // With subfolders: false and skip: Some(&lib), files in lib are skipped
+    let e = crate::import::expand_report_subfolders(std::slice::from_ref(&src_str), Some(&lib), crate::walk::Limits::default(), false);
+    assert_eq!(e.files.len(), 1);
+    assert!(e.files[0].replace('\\', "/").ends_with("root.jpg"));
+
+    // If skip matches the scanned directory itself, nothing is expanded
+    let e_skip_self = crate::import::expand_report_subfolders(std::slice::from_ref(&src_str), Some(&src), crate::walk::Limits::default(), false);
+    assert_eq!(e_skip_self.files.len(), 0);
+
+    let _ = std::fs::remove_dir_all(src);
 }
 
 /// A file that was only browsed (Local) is not "already in the library": the scan offers it, and
@@ -519,8 +585,8 @@ fn exif_clock_malformed_capture_cannot_fabricate_tracklog_match() {
     assert_eq!(ids(&imported, "imported"), 1, "{imported}");
     let bad_id = imported["imported"][0].as_u64().unwrap();
     assert_eq!(
-        s.catalog.photo(PhotoId(bad_id)).unwrap().captured.as_deref(),
-        Some("2026-01-14T05:58:48"),
+        s.catalog.photo(PhotoId(bad_id)).unwrap().captured,
+        lcc_catalog::dates::local(1_768_392_000),
         "malformed EXIF must leave the normal file-date fallback in effect"
     );
     let all = s.execute("photo.allMetadata", &json!({"id": bad_id})).unwrap();

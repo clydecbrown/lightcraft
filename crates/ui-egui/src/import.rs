@@ -10,7 +10,7 @@
 //! one undo step.
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
-use lcc_engine::import::{ImportCandidate, ImportWarning, ScanInput, ScanOutput, ScanProgress, scan_with};
+use lcc_engine::import::{ImportCandidate, ImportWarning, ScanInput, ScanOutput, ScanProgress, scan_with, scan_with_subfolders};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
@@ -55,6 +55,8 @@ pub(crate) fn note_dialog_bottom(ui: &egui::Ui) {
 pub struct ImportDialog {
     /// The files / folders that were scanned (shown as the source).
     pub sources: Vec<String>,
+    /// When the source is a folder, whether to search recursively into its subfolders.
+    pub subfolders: bool,
     pub candidates: Vec<ImportCandidate>,
     pub checked: Vec<bool>,
     /// Copy into the library (else add in place).
@@ -141,9 +143,19 @@ fn file_type(c: &ImportCandidate) -> String {
 }
 
 impl ImportDialog {
+    /// A clean review dialog with default import settings.
+    pub fn empty() -> Self {
+        ImportDialog { on_deleted: "restore".into(), subfolders: true, ..Default::default() }
+    }
+
+    /// Whether any of the scanned sources is a directory.
+    pub fn has_folder_source(&self) -> bool {
+        self.sources.iter().any(|s| std::path::Path::new(s).is_dir())
+    }
+
     pub fn new(candidates: Vec<ImportCandidate>) -> Self {
         let checked = candidates.iter().map(|c| c.duplicate.is_none() && c.error.is_none()).collect();
-        ImportDialog { candidates, checked, on_deleted: "restore".into(), ..Default::default() }
+        ImportDialog { candidates, checked, on_deleted: "restore".into(), subfolders: true, ..Default::default() }
     }
 
     /// Whether the library the scan was made in is still the open one (a review that names none counts).
@@ -498,6 +510,8 @@ pub struct ScanTask {
     sources: Vec<String>,
     /// The scan's row in the activity stack (its ✕ and `activity.cancel` set `progress.cancel`).
     guard: lcc_engine::activity::TaskGuard,
+    /// Whether subfolders are being scanned.
+    pub subfolders: bool,
 }
 
 /// The activity row of a scan: the review's ("Scanning folder") or the Local view's ("Reading folder").
@@ -536,6 +550,11 @@ pub(crate) fn cards_seen(app: &mut LccApp, now: Vec<lcc_engine::devices::Device>
 
 /// Scan `paths` in the background, then open the review dialog (see [`poll_scan`]).
 pub fn open(app: &mut LccApp, paths: Vec<String>) -> Result<Value, String> {
+    open_with_subfolders(app, paths, true)
+}
+
+/// Scan `paths` in the background with `subfolders` option, then open the review dialog.
+pub fn open_with_subfolders(app: &mut LccApp, paths: Vec<String>, subfolders: bool) -> Result<Value, String> {
     if app.scan.is_some() {
         return Err("a scan is already running".into());
     }
@@ -547,15 +566,44 @@ pub fn open(app: &mut LccApp, paths: Vec<String>) -> Result<Value, String> {
     let progress = std::sync::Arc::new(ScanProgress::default());
     let (tx, rx) = std::sync::mpsc::channel();
     let p = progress.clone();
+    let sub = subfolders;
     let job = move || {
-        let _ = tx.send(scan_with(input, &paths, &p));
+        let _ = tx.send(scan_with_subfolders(input, &paths, &p, sub));
     };
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(job);
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, false);
-    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: false, sources, guard });
+    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: false, sources, guard, subfolders });
+    Ok(json!({"scanning": true}))
+}
+
+/// Re-scan `d.sources` in the background with the given `subfolders` setting.
+pub fn rescan_with_subfolders(app: &mut LccApp, d: &ImportDialog, subfolders: bool) -> Result<Value, String> {
+    if let Some(t) = app.scan.take() {
+        t.progress.cancel.store(true, Ordering::Relaxed);
+    }
+    if d.sources.is_empty() {
+        return Ok(Value::Null);
+    }
+    let (input, paths) = ScanInput::new(&mut app.session, &d.sources);
+    let progress = std::sync::Arc::new(ScanProgress::default());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let p = progress.clone();
+    let sources = d.sources.clone();
+    let copy = d.copy;
+    let album = d.album;
+    let sub = subfolders;
+    let job = move || {
+        let _ = tx.send(scan_with_subfolders(input, &paths, &p, sub));
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::spawn(job);
+    #[cfg(target_arch = "wasm32")]
+    job();
+    let guard = scan_guard(app, &progress, false);
+    app.scan = Some(ScanTask { progress, rx, copy, album, browse: false, sources, guard, subfolders });
     Ok(json!({"scanning": true}))
 }
 
@@ -618,7 +666,7 @@ pub fn browse(app: &mut LccApp, path: &str, subfolders: Option<bool>) -> Result<
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, true);
-    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: true, sources: Vec::new(), guard });
+    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: true, sources: Vec::new(), guard, subfolders: false });
     app.renderer.forget_imports();
     Ok(json!({"path": dir_s, "subfolders": subfolders, "scanning": true}))
 }
@@ -677,12 +725,15 @@ pub fn poll_scan(app: &mut LccApp, ctx: &egui::Context) {
         }
         return;
     }
-    if out.candidates.is_empty() {
-        app.toast(ctx, crate::i18n::tr("No photos found"));
-        return;
-    }
-    app.renderer.forget_imports();
-    let mut d = ImportDialog::new(out.candidates);
+    let dialog_was_import = matches!(app.ui.dialog, Some(crate::state::Dialog::Import { .. }));
+    let mut d = if let Some(crate::state::Dialog::Import { opts }) = app.ui.dialog.take() {
+        let mut d = *opts;
+        d.candidates = out.candidates;
+        d.checked = (0..d.candidates.len()).map(|i| d.checked_by_default(i)).collect();
+        d
+    } else {
+        ImportDialog::new(out.candidates)
+    };
     (d.scan_limited, d.unreadable, d.unsupported) = (out.truncated, out.unreadable, out.unsupported);
     let trashed = d
         .candidates
@@ -692,14 +743,23 @@ pub fn poll_scan(app: &mut LccApp, ctx: &egui::Context) {
     d.set_trashed(trashed);
     d.copy = task.copy;
     // only an album the review offers (it may have been deleted while the scan ran)
-    d.album = task.album.filter(|id| app.session.catalog.album(lcc_catalog::AlbumId(*id)).is_some_and(|a| !a.folder && !a.is_smart()));
+    if task.album.is_some() {
+        d.album = task.album.filter(|id| app.session.catalog.album(lcc_catalog::AlbumId(*id)).is_some_and(|a| !a.folder && !a.is_smart()));
+    }
     d.sources = task.sources;
-    if let Some(mp) = &app.session.import_defaults.metadata_preset
+    d.subfolders = task.subfolders;
+    if d.metadata_preset.is_empty()
+        && let Some(mp) = &app.session.import_defaults.metadata_preset
         && app.session.metadata_presets.iter().any(|m| m.name.eq_ignore_ascii_case(mp))
     {
         d.metadata_preset = mp.clone();
     }
     d.library = Some(app.session.library_generation());
+    if d.candidates.is_empty() && !dialog_was_import && !d.has_folder_source() {
+        app.toast(ctx, crate::i18n::tr("No photos found"));
+        return;
+    }
+    app.renderer.forget_imports();
     app.review_pending = Some(crate::state::Dialog::Import { opts: Box::new(d) });
     show_pending_review(app, ctx);
 }
@@ -738,7 +798,7 @@ pub(crate) fn stall_scan_of(app: &mut LccApp, browse: bool) -> Box<dyn std::any:
     let progress = std::sync::Arc::new(ScanProgress::default());
     let (tx, rx) = std::sync::mpsc::channel::<ScanOutput>();
     let guard = scan_guard(app, &progress, false);
-    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse, sources: Vec::new(), guard });
+    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse, sources: Vec::new(), guard, subfolders: true });
     Box::new(tx)
 }
 
@@ -1258,7 +1318,7 @@ pub fn body(app: &mut LccApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             let summary = crate::panels::left::fs_cached(ui, "import-source", &joined, f64::INFINITY, |s| {
                 inspect_sources(&s.split('\n').map(str::to_string).collect::<Vec<_>>())
             })
-            .map(|summary| summary.display())
+            .map(|summary| summary.display(d.subfolders))
             .unwrap_or_else(|| crate::i18n::tr_format!("{} item{}", d.sources.len(), if d.sources.len() == 1 { "" } else { "s" }));
             let r = ui.label(egui::RichText::new(summary).color(t.text_label)).on_hover_text(joined);
             register(ui.ctx(), "label:importSource", r.rect);
@@ -1930,7 +1990,12 @@ pub fn example_destination(app: &LccApp, d: &ImportDialog) -> Option<String> {
 
 /// The import source in a few words: a folder's name, a file's name, or "N files and folders".
 pub fn source_summary(sources: &[String]) -> String {
-    inspect_sources(sources).display()
+    source_summary_with_subfolders(sources, true)
+}
+
+/// The import source in a few words, taking the `subfolders` toggle into account for folders.
+pub fn source_summary_with_subfolders(sources: &[String], subfolders: bool) -> String {
+    inspect_sources(sources).display(subfolders)
 }
 
 /// Facts cached by the filesystem worker, formatted in the UI thread's active language.
@@ -1944,13 +2009,25 @@ enum SourceSummary {
 }
 
 impl SourceSummary {
-    fn display(&self) -> String {
+    fn display(&self, subfolders: bool) -> String {
         match self {
-            Self::Folder(name) => crate::i18n::tr_format!("Folder “{}” (and its subfolders)", name),
+            Self::Folder(name) => {
+                if subfolders {
+                    crate::i18n::tr_format!("Folder “{}” (and its subfolders)", name)
+                } else {
+                    crate::i18n::tr_format!("Folder “{}”", name)
+                }
+            }
             Self::File(name) => name.clone(),
             Self::Many { files, folders } => match (files, folders) {
                 (_, 0) => crate::i18n::tr_format!("{} files", files),
-                (0, f) => crate::i18n::tr_format!("{f} folders (and their subfolders)", f = f),
+                (0, f) => {
+                    if subfolders {
+                        crate::i18n::tr_format!("{f} folders (and their subfolders)", f = f)
+                    } else {
+                        crate::i18n::tr_format!("{f} folder{}", if *f == 1 { "" } else { "s" }, f = f)
+                    }
+                }
                 (_, f) => crate::i18n::tr_format!("{} files and {f} folder{}", files, if *f == 1 { "" } else { "s" }, f = f),
             },
         }

@@ -82,6 +82,8 @@
   "{n} new photos in “{folder}”: right-click the folder ▸ Add New Photos": "{n} fotos nuevas en «{folder}»: clic derecho en la carpeta ▸ Añadir fotos nuevas",
   "{n} new photos in {folders} folders: see the badges in Folders": "{n} fotos nuevas en {folders} carpetas: mira las marcas en Carpetas",
   "Version {new} is older than the installed version {installed}": "La versión {new} es anterior a la versión instalada {installed}",
+  "Folder “{}”": "Carpeta “{}”",
+  "{f} folder{}": "{f} carpeta{}",
   "Module: {size} KB": "Módulo: {size} KB",
   "by {author} · {id}": "de {author} · {id}"
 }

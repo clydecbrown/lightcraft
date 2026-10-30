@@ -1443,6 +1443,8 @@
   "Indexing photos": "Indexation des photos",
   "Each photo gets the date and time in its file name (IMG_20260921_143000).": "Chaque photo reçoit la date et l'heure de son nom de fichier (IMG_20260921_143000).",
   "No date in the active photo's file name": "Aucune date dans le nom de fichier de la photo active",
+  "No supported photos found in this folder.": "Aucune photo prise en charge trouvée dans ce dossier.",
+  "Include subfolders": "Inclure les sous-dossiers",
   "Install from File…": "Installer depuis un fichier…",
   "Show Folder": "Afficher le dossier",
   "Permissions": "Autorisations",

@@ -1498,7 +1498,9 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
             .any(|s| app.renderer.is_pending(s) && !app.renderer.retrying(s));
     let keys = [Slot::Main, Slot::Before, Slot::Window(crate::render::PANE_AFTER), Slot::Window(crate::render::PANE_BEFORE)]
         .map(|s| app.renderer.textures.get(&s).filter(|t| t.photo == id).map(|t| t.key));
-    let rendering = ui.ctx().data_mut(|d| rendering_overdue(d.get_temp_mut_or(egui::Id::new("loupe-rendering"), None), keys, coming, now));
+    let wait = rendering_wait(app);
+    let rendering =
+        ui.ctx().data_mut(|d| rendering_overdue_for(d.get_temp_mut_or(egui::Id::new("loupe-rendering"), (id, None)), id, keys, coming, now, wait));
     // the render failed while a stand-in is up: what is on screen is all there will be (also while
     // a library change retries it)
     let failed = (!rendering
@@ -1513,11 +1515,10 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
         let over = if over.is_positive() { over } else { canvas };
         match failed {
             Some(e) => failed_pill(ui, app, &photo, canvas, over, nav, "loupe:renderFailed", e),
-            // View Options' Show message when loading or rendering photos
-            None if app.ui.settings.loupe_messages => {
+            // (View Options' Show message when loading or rendering photos sets how long the wait is)
+            None => {
                 loupe_pill(ui, canvas, over, nav, "loupe:rendering", crate::i18n::tr("Rendering…"), false);
             }
-            None => {}
         }
     }
     if let Some(why) = photo.preview_only.as_deref().filter(|_| !fullscreen) {
@@ -1995,17 +1996,22 @@ pub(crate) const WARM_FULL_AFTER_S: f64 = 1.5;
 
 /// How long a render may be on its way, with nothing new on screen, before the loupe says
 /// "Rendering…" (s): as long as the activity stack waits before it shows a task.
-const RENDERING_AFTER_SECS: f64 = 0.5;
+pub(crate) const RENDERING_AFTER_SECS: f64 = 0.5;
+
+/// The same wait while View Options' Show message when loading or rendering photos is off: the
+/// person asked not to be told about ordinary renders, but a photo that is still the old picture
+/// after this long looks like a frozen app, so the loupe says so anyway (s).
+pub(crate) const SLOW_RENDERING_AFTER_SECS: f64 = 3.0;
 
 /// What [`rendering_overdue`] keeps between frames while a render is coming: the texture keys on
 /// screen, since when, and whether the pill is up.
 type RenderingWait = Option<([Option<u64>; 4], f64, bool)>;
 
-/// Whether the loupe says "Rendering…": a render has been `coming` for [`RENDERING_AFTER_SECS`] with
-/// no new texture `keys` on screen. The wait starts when the render starts coming (an idle app draws
-/// no frames, so the last one may be long ago), and once up the pill stays until nothing is coming:
-/// drafts slower than the wait don't make it blink.
-pub(crate) fn rendering_overdue(wait: &mut RenderingWait, keys: [Option<u64>; 4], coming: bool, now: f64) -> bool {
+/// Whether the loupe says "Rendering…": a render has been `coming` for `after` seconds (the
+/// constants above) with no new texture `keys` on screen. The wait starts when the render starts
+/// coming (an idle app draws no frames, so the last one may be long ago), and once up the pill stays
+/// until nothing is coming: drafts slower than the wait don't make it blink.
+pub(crate) fn rendering_overdue(wait: &mut RenderingWait, keys: [Option<u64>; 4], coming: bool, now: f64, after: f64) -> bool {
     if !coming {
         *wait = None;
         return false;
@@ -2014,8 +2020,30 @@ pub(crate) fn rendering_overdue(wait: &mut RenderingWait, keys: [Option<u64>; 4]
     if !*up && *seen != keys {
         (*seen, *since) = (keys, now);
     }
-    *up |= now - *since > RENDERING_AFTER_SECS;
+    *up |= now - *since > after;
     *up
+}
+
+/// [`rendering_overdue`] for a pane that shows one photo at a time: the wait belongs to the photo
+/// in `state`, so one moved in starts its own (the pill of the last photo doesn't carry over).
+pub(crate) fn rendering_overdue_for(
+    state: &mut (PhotoId, RenderingWait),
+    photo: PhotoId,
+    keys: [Option<u64>; 4],
+    coming: bool,
+    now: f64,
+    after: f64,
+) -> bool {
+    if state.0 != photo {
+        *state = (photo, None);
+    }
+    rendering_overdue(&mut state.1, keys, coming, now, after)
+}
+
+/// How long a render may be on its way before the loupe says "Rendering…": View Options' Show message when loading or
+/// rendering photos on, half a second; off, only a render that stays slow says so.
+fn rendering_wait(app: &LccApp) -> f64 {
+    if app.ui.settings.loupe_messages { RENDERING_AFTER_SECS } else { SLOW_RENDERING_AFTER_SECS }
 }
 
 /// A pill over the photo, 12 pt above the bottom of `over` or just above the Navigator when that
@@ -3061,14 +3089,49 @@ fn frame_crop_quad(d: &DevelopSettings, frame: &Frame) -> [Point; 4] {
 
 // ------------------------------------------------------------------------ masks
 
-/// Where a mask component's pin sits (normalized), for shapes that have a place on the photo.
+/// Where a mask component's pin sits (normalized), for shapes that have a place on the photo: an
+/// Object at its first click, a Describe mask on what its segmentation found (issue #3049).
 pub(crate) fn component_pin(shape: &MaskShape) -> Option<Point> {
     match shape {
         MaskShape::Radial { center, .. } => Some(*center),
         MaskShape::Linear { start, end } => Some(Point::new((start.x + end.x) / 2.0, (start.y + end.y) / 2.0)),
         MaskShape::Brush { strokes } => strokes.iter().find(|s| !s.erase).and_then(|s| s.points.first()).copied(),
+        MaskShape::Object { hint, seg, .. } => hint.first().copied().or_else(|| seg.as_ref().and_then(seg_center)),
+        MaskShape::Prompt { seg, .. } => seg.as_ref().and_then(seg_center),
         _ => None,
     }
+}
+
+/// The middle of what a segmentation selects (the mean of its cells inside the mask), else of the
+/// part of the image it covers; `None` when it is damaged.
+fn seg_center(seg: &lcc_develop::SegMask) -> Option<Point> {
+    let [x0, y0, x1, y1] = seg.bounds()?;
+    let logits = seg.logits()?;
+    let side = seg.side as usize;
+    let (mut sx, mut sy, mut n) = (0.0, 0.0, 0usize);
+    for (i, _) in logits.iter().enumerate().filter(|(_, l)| **l > 0.0) {
+        sx += (i % side) as f64 + 0.5;
+        sy += (i / side) as f64 + 0.5;
+        n += 1;
+    }
+    let cells = n as f64 * side as f64;
+    let (u, v) = if n == 0 { (0.5, 0.5) } else { (sx / cells, sy / cells) };
+    Some(Point::new(x0 + u * (x1 - x0), y0 + v * (y1 - y0)))
+}
+
+/// The mask whose pin is under `q` (within the 10 px the pin grips grab at), not counting
+/// the `active` mask's own pins.
+fn other_pin_at(grips: &[(u32, usize, u8, Pos2)], active: Option<u32>, q: Pos2) -> Option<u32> {
+    grips
+        .iter()
+        .filter(|g| Some(g.0) != active && g.2 == 0 && g.3.distance(q) < 10.0)
+        .min_by(|a, b| a.3.distance(q).total_cmp(&b.3.distance(q)))
+        .map(|g| g.0)
+}
+
+/// Whether `q` is on one of the `active` mask's own pins (within the same 10 px).
+fn own_pin_at(grips: &[(u32, usize, u8, Pos2)], active: Option<u32>, q: Pos2) -> bool {
+    active.is_some_and(|a| grips.iter().any(|g| g.0 == a && g.2 == 0 && g.3.distance(q) < 10.0))
 }
 
 /// `shape` moved by `dn` (normalized); `handle` 1/2 = a linear gradient's start/end set to `at`.
@@ -3280,7 +3343,11 @@ fn mask_overlay(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui::Response, map:
         color_range_pick(app, ui, resp, map);
         return;
     }
-    // Object tool: a click includes what's under it, ⌥-click leaves it out
+    // Object tool: a click includes what's under it, ⌥-click leaves it out. A click on another
+    // mask's pin selects that mask instead of adding a click to the selected one (issue #3049);
+    // the tool then stays on only if the newly selected mask has an Object selection to refine. A
+    // click on the selected mask's own pin does nothing: its first click is already there, and a
+    // near-copy of it would use up one of the mask's limited Object clicks.
     if app.ui.tool == "object" {
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
@@ -3288,6 +3355,18 @@ fn mask_overlay(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui::Response, map:
         if resp.clicked()
             && let Some(q) = resp.interact_pointer_pos()
         {
+            if let Some(mid) = other_pin_at(&grips, app.session.active_mask, q) {
+                let _ = app.run("mask.select", json!({"id": mid}));
+                let has_object =
+                    d.masks.iter().find(|m| m.id == mid).is_some_and(|m| m.components.iter().any(|c| matches!(c.shape, MaskShape::Object { .. })));
+                if !has_object {
+                    app.ui.tool.clear();
+                }
+                return;
+            }
+            if own_pin_at(&grips, app.session.active_mask, q) {
+                return;
+            }
             let n = map.norm(q);
             let exclude = ui.input(|i| i.modifiers.alt);
             match app.run_typed("mask.objectPoint", json!({"x": n.x, "y": n.y, "exclude": exclude})) {
@@ -4353,7 +4432,9 @@ pub(crate) fn filmstrip(app: &mut LccApp, ui: &mut egui::Ui, r: Rect) {
                 Sense::click()
             };
             let resp = ui.interact(cr, egui::Id::new(("film", id.0)), sense);
-            let failed = app.renderer.thumb(*id).is_none() && app.renderer.failure(Slot::Thumb(*id)).is_some();
+            // asked for first: a failure left by an earlier request is not this tile's verdict once a new one is on its way
+            super::grid::request_thumb(app, *id, (256.0 * ppp.min(2.0) / 2.0) as usize * 2, 8);
+            let failed = app.renderer.thumb(*id).is_none() && app.renderer.thumb_failure(*id).is_some();
             crate::widgets::announce(&resp, film_spoken(app.session.catalog.photo(*id).map_or("", |p| p.file_name.as_str()), failed));
             if (map || reorder) && resp.drag_started() {
                 if !app.session.selection.contains(*id) {
@@ -4383,12 +4464,13 @@ pub(crate) fn filmstrip(app: &mut LccApp, ui: &mut egui::Ui, r: Rect) {
                 p.text(pos2(cr.right() - 8.0, cr.top() + 10.0), Align2::RIGHT_CENTER, &ph.format, t.semibold(8.5), t.text_dim);
             }
             let img_area = Rect::from_min_max(cr.min + vec2(10.0, 22.0), cr.max - vec2(10.0, 8.0));
-            super::grid::request_thumb(app, *id, (256.0 * ppp.min(2.0) / 2.0) as usize * 2, 8);
             let thumb = app.renderer.thumb(*id);
             if thumb.is_none() {
                 p.rect_filled(img_area, 0.0, t.skeleton);
                 if failed {
                     p.text(img_area.center(), Align2::CENTER_CENTER, "!", t.semibold(14.0), t.text);
+                } else {
+                    super::grid::paint_loading_cue(p, &t, img_area, img_area, "film:badge:loading:", id.0);
                 }
             }
             if let Some(tex) = thumb {
@@ -4808,20 +4890,42 @@ mod tests {
     /// a moment with nothing new on screen, and doesn't blink while slow drafts arrive.
     #[test]
     fn the_loupe_says_rendering_when_the_screen_falls_behind() {
-        use super::{RENDERING_AFTER_SECS as WAIT, rendering_overdue};
+        use super::{RENDERING_AFTER_SECS as WAIT, SLOW_RENDERING_AFTER_SECS as SLOW, rendering_overdue};
         let key = |k| [Some(k), None, None, None];
         let mut wait = None;
-        assert!(!rendering_overdue(&mut wait, key(1), false, 0.0), "nothing coming");
+        assert!(!rendering_overdue(&mut wait, key(1), false, 0.0, WAIT), "nothing coming");
         // an edit after an idle spell: the wait starts now, not at the last frame drawn
-        assert!(!rendering_overdue(&mut wait, key(1), true, 30.0), "a render just asked for");
-        assert!(!rendering_overdue(&mut wait, key(1), true, 30.0 + WAIT * 0.8), "a quick render never shows it");
-        assert!(rendering_overdue(&mut wait, key(1), true, 30.0 + WAIT * 1.2), "nothing new for the wait");
-        assert!(rendering_overdue(&mut wait, key(2), true, 31.0 + WAIT), "once up, a slow draft doesn't blink it");
-        assert!(!rendering_overdue(&mut wait, key(3), false, 32.0), "done");
+        assert!(!rendering_overdue(&mut wait, key(1), true, 30.0, WAIT), "a render just asked for");
+        assert!(!rendering_overdue(&mut wait, key(1), true, 30.0 + WAIT * 0.8, WAIT), "a quick render never shows it");
+        assert!(rendering_overdue(&mut wait, key(1), true, 30.0 + WAIT * 1.2, WAIT), "nothing new for the wait");
+        assert!(rendering_overdue(&mut wait, key(2), true, 31.0 + WAIT, WAIT), "once up, a slow draft doesn't blink it");
+        assert!(!rendering_overdue(&mut wait, key(3), false, 32.0, WAIT), "done");
         // a drag whose drafts keep up: always something coming, a new draft every 0.1 s
         for i in 1..30u32 {
-            assert!(!rendering_overdue(&mut wait, key(u64::from(i)), true, 40.0 + f64::from(i) * 0.1), "draft {i}");
+            assert!(!rendering_overdue(&mut wait, key(u64::from(i)), true, 40.0 + f64::from(i) * 0.1, WAIT), "draft {i}");
         }
+        // with the message off the same logic waits for the longer time
+        let mut wait = None;
+        assert!(!rendering_overdue(&mut wait, key(1), true, 50.0, SLOW));
+        assert!(!rendering_overdue(&mut wait, key(1), true, 50.0 + SLOW * 0.8, SLOW), "a render that is only a little slow stays quiet");
+        assert!(rendering_overdue(&mut wait, key(1), true, 50.0 + SLOW * 1.2, SLOW), "one that stays slow says so");
+    }
+
+    /// The wait belongs to the photo on screen: a slow render's pill doesn't stay up for the next
+    /// photo, whose render may well come in under the wait.
+    #[test]
+    fn the_rendering_wait_starts_afresh_for_the_next_photo() {
+        use super::{PhotoId, RENDERING_AFTER_SECS as WAIT, rendering_overdue_for};
+        let key = |k| [Some(k), None, None, None];
+        let mut state = (PhotoId(1), None);
+        assert!(!rendering_overdue_for(&mut state, PhotoId(1), key(1), true, 10.0, WAIT));
+        assert!(rendering_overdue_for(&mut state, PhotoId(1), key(1), true, 10.0 + WAIT * 1.2, WAIT), "a slow render of the first photo");
+        // the next photo's render is pending at once: its own wait just began
+        assert!(
+            !rendering_overdue_for(&mut state, PhotoId(2), key(1), true, 10.0 + WAIT * 1.3, WAIT),
+            "the pill of the last photo does not carry over"
+        );
+        assert!(rendering_overdue_for(&mut state, PhotoId(2), key(1), true, 10.0 + WAIT * 2.6, WAIT), "its own wait can still run out");
     }
 
     /// Issue #652: a native host reports the GPU's texture limit in the first frame's input only.

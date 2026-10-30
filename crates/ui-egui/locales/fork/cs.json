@@ -109,5 +109,7 @@
   "Raw files and generated photos can only be edited as a copy with adjustments.": "Soubory raw lze upravit jen jako kopii s úpravami.",
   "File format, colour space and bit depth: Settings → External Editing.": "Formát souboru, barevný prostor a bitová hloubka: Nastavení → Externí úpravy.",
   "Settings → External Editing → Edit In turns the question back on": "Nastavení → Externí úpravy → Upravit v znovu zapne dotaz",
-  "Indexing photos": "Indexování fotografií"
+  "Indexing photos": "Indexování fotografií",
+  "No supported photos found in this folder.": "V této složce nebyly nalezeny žádné podporované fotografie.",
+  "Include subfolders": "Zahrnout podsložky"
 }

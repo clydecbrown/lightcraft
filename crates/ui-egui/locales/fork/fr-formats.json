@@ -72,6 +72,8 @@
   "{n} new photos in “{folder}”: right-click the folder ▸ Add New Photos": "{n} nouvelles photos dans « {folder} » : clic droit sur le dossier ▸ Ajouter les nouvelles photos",
   "{n} new photos in {folders} folders: see the badges in Folders": "{n} nouvelles photos dans {folders} dossiers : voir les badges dans Dossiers",
   "Version {new} is older than the installed version {installed}": "La version {new} est plus ancienne que la version installée {installed}",
+  "Folder “{}”": "Dossier « {} »",
+  "{f} folder{}": "{f} dossier{}",
   "Module: {size} KB": "Module : {size} Ko",
   "by {author} · {id}": "par {author} · {id}"
 }

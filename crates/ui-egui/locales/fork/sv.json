@@ -41,5 +41,7 @@
   "File format, colour space and bit depth: Settings → External Editing.": "Filformat, färgrymd och bitdjup: Inställningar → Extern redigering.",
   "Settings → External Editing → Edit In turns the question back on": "Inställningar → Extern redigering → Redigera i slår på frågan igen",
   "Don't ask again": "Fråga inte igen",
-  "Indexing photos": "Indexerar foton"
+  "Indexing photos": "Indexerar foton",
+  "No supported photos found in this folder.": "Inga foton som stöds hittades i den här mappen.",
+  "Include subfolders": "Inkludera undermappar"
 }

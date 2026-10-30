@@ -712,6 +712,37 @@ mod tests {
         assert!(!seen.iter().any(|e| matches!(e, egui::Event::Paste(_))), "{seen:?}");
     }
 
+    /// A coordinate or delta too large for an `f32` became an infinite or NaN pointer position or
+    /// scroll delta (egui panics on NaN positions in debug builds). Such a gesture is refused and
+    /// queues nothing; ordinary values and over-large `count` / `steps` still work.
+    #[test]
+    fn gestures_refuse_numbers_that_are_not_screen_positions() {
+        let mut app = LccApp::new(lcc_engine::Session::new(), crate::Services::default());
+        app.ui.settings.gpu = false;
+        let mut h = Headless::new(app, [480.0, 320.0], 1.0);
+        let t = Duration::from_secs(5);
+        h.step();
+        let refused = [
+            ("ui.click", json!({"x": 1e308})),
+            ("ui.click", json!({"y": -1e308})),
+            ("ui.move", json!({"x": 1e300, "y": 1.0})),
+            ("ui.drag", json!({"x": 1.0, "toY": 1e308})),
+            ("ui.dragWidget", json!({"id": "any", "dx": -1e308})),
+            ("ui.scroll", json!({"dy": 1e308})),
+            ("ui.pointer", json!({"events": [{"kind": "down", "x": 0.5}, {"kind": "move", "x": 1e308}]})),
+        ];
+        for (method, p) in refused {
+            let r = h.request(method, p.clone(), t);
+            assert_eq!(r["ok"], false, "{method} {p}: {r}");
+            assert!(r["error"].as_str().is_some_and(|e| e.starts_with(method) && e.contains("between")), "{r}");
+        }
+        let r = h.request("ui.click", json!({"x": 10.0, "y": 5.0, "count": u64::MAX}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        let r = h.request("ui.drag", json!({"x": 1.0, "y": 1.0, "toX": 999_999.0, "toY": 1.0, "steps": 1e12}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+    }
+
     #[test]
     fn screenshot_dimensions_are_checked_before_layout() {
         assert_eq!(viewport_pixels([1600.0, 1000.0], 2.0).unwrap(), [3200, 2000]);
@@ -4626,12 +4657,12 @@ mod tests {
         let img = lcc_raster::Rgba8 { width: 8, height: 8, data: vec![[40, 3, 9, 255]; 64] };
         let png = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &lcc_codecs::EncodeMeta::default()).unwrap();
         std::fs::write(src.join("IMG_01.png"), png).unwrap();
-        // undated files are filed by the file's date (2026-01-14T05:58:48)
+        // undated files are filed by the file's date (noon UTC: 14 January in every zone the tests run in)
         std::fs::File::options()
             .write(true)
             .open(src.join("IMG_01.png"))
             .unwrap()
-            .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_768_370_328))
+            .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_768_392_000))
             .unwrap();
         let dest_s = dest.to_string_lossy().to_string();
         let services = crate::Services { png: None, pick_folder: Some(Box::new(move || Some(dest_s.clone()))), ..Default::default() };
@@ -4689,7 +4720,7 @@ mod tests {
                 .write(true)
                 .open(src.join(format!("IMG_0{i}.png")))
                 .unwrap()
-                .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_768_370_328))
+                .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_768_392_000))
                 .unwrap();
         }
         let dest_s = dest.to_string_lossy().to_string();
@@ -5386,6 +5417,82 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// #3252: Settings ▸ Performance ▸ Custom… opens a cache size of one's own, in GB; a custom size is shown as such, not as
+    /// 2 GB. (The Performance tab is open.)
+    fn custom_cache_size(h: &mut Headless, t: Duration) {
+        let custom_field = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w == "drag:settingsCacheCustom");
+        assert!(!custom_field(h));
+        crate::settings_screen::reveal(h, "button:settingsCacheCustom");
+        h.request("ui.clickWidget", json!({"id": "button:settingsCacheCustom"}), t);
+        h.step();
+        assert!(custom_field(h), "the size field");
+        assert_eq!(h.app.session.cache_mb, 512, "nothing changed until a size is chosen");
+        // typed in: nothing is saved before the edit is over (typing 16 must not set 1 GB on the way)
+        crate::settings_screen::reveal(h, "drag:settingsCacheCustom");
+        let r = h.request("ui.clickWidget", json!({"id": "drag:settingsCacheCustom"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.request("ui.key", json!({"key": "a", "cmd": true}), t);
+        h.request("ui.text", json!({"text": "1"}), t);
+        h.step();
+        h.request("ui.text", json!({"text": "6"}), t);
+        h.step();
+        assert_eq!(h.app.session.cache_mb, 512, "still being typed");
+        h.request("ui.key", json!({"key": "enter"}), t);
+        h.step();
+        h.step();
+        assert_eq!(h.app.session.cache_mb, 16384, "saved when the edit is over");
+        h.app.session.execute("library.preferences", &json!({"cacheMb": 16384})).unwrap();
+        h.step();
+        h.step();
+        assert!(custom_field(h) && h.app.session.cache_mb == 16384, "16 GB stays, shown as custom");
+        crate::settings_screen::reveal(h, "button:settingsCache-3");
+        h.request("ui.clickWidget", json!({"id": "button:settingsCache-3"}), t);
+        h.step();
+        assert!(!custom_field(h) && h.app.session.cache_mb == 4096);
+        crate::settings_screen::reveal(h, "button:settingsCache-0");
+        h.request("ui.clickWidget", json!({"id": "button:settingsCache-0"}), t);
+        assert_eq!(h.app.session.cache_mb, 512);
+    }
+
+    /// A custom size still being typed is dropped by a preset chosen meanwhile, and saved when the section is left. (The
+    /// Performance tab is open, at 512 MB; it is again at the end.)
+    fn custom_cache_size_pending(h: &mut Headless, t: Duration) {
+        let type_size = |h: &mut Headless, text: &str| {
+            crate::settings_screen::reveal(h, "button:settingsCacheCustom");
+            h.request("ui.clickWidget", json!({"id": "button:settingsCacheCustom"}), t);
+            h.step();
+            crate::settings_screen::reveal(h, "drag:settingsCacheCustom");
+            h.request("ui.clickWidget", json!({"id": "drag:settingsCacheCustom"}), t);
+            h.step();
+            h.request("ui.key", json!({"key": "a", "cmd": true}), t);
+            h.request("ui.text", json!({"text": text}), t);
+            h.step();
+        };
+        // 3 typed, then 1 GB chosen: Custom… again starts from 1 GB, and the 3 is not saved behind it
+        type_size(h, "3");
+        crate::settings_screen::reveal(h, "button:settingsCache-1");
+        h.request("ui.clickWidget", json!({"id": "button:settingsCache-1"}), t);
+        h.step();
+        assert_eq!(h.app.session.cache_mb, 1024);
+        crate::settings_screen::reveal(h, "button:settingsCacheCustom");
+        h.request("ui.clickWidget", json!({"id": "button:settingsCacheCustom"}), t);
+        for _ in 0..3 {
+            h.step();
+        }
+        assert_eq!(h.app.session.cache_mb, 1024, "the preset stays");
+        // 5 typed, then another section: saved on the way out
+        type_size(h, "5");
+        assert_eq!(h.app.session.cache_mb, 1024, "still being typed");
+        h.request("ui.clickWidget", json!({"id": "button:settingsTab-import"}), t);
+        h.step();
+        assert_eq!(h.app.session.cache_mb, 5120, "saved when the section is left");
+        h.request("ui.clickWidget", json!({"id": "button:settingsTab-performance"}), t);
+        crate::settings_screen::reveal(h, "button:settingsCache-0");
+        h.request("ui.clickWidget", json!({"id": "button:settingsCache-0"}), t);
+        assert_eq!(h.app.session.cache_mb, 512);
+    }
+
     /// Settings (⌘,): tabs switch, app settings change the UI state, library settings go through
     /// the engine; the delete confirmation guards ⌫.
     #[test]
@@ -5426,6 +5533,8 @@ mod tests {
         crate::settings_screen::reveal(&mut h, "button:settingsCache-0");
         h.request("ui.clickWidget", json!({"id": "button:settingsCache-0"}), t);
         assert_eq!(h.app.session.cache_mb, 512);
+        custom_cache_size(&mut h, t);
+        custom_cache_size_pending(&mut h, t);
         crate::settings_screen::reveal(&mut h, "button:settingsPreview-3");
         h.request("ui.clickWidget", json!({"id": "button:settingsPreview-3"}), t);
         assert_eq!(h.app.ui.settings.preview_limit, 3840);
@@ -5975,7 +6084,7 @@ mod tests {
     }
 
     /// View Options' Show message when loading or rendering photos (on by default): turned off in
-    /// the window, the loupe does not say "Rendering…" while an edit renders; `view.viewOptions
+    /// the window, the loupe does not say "Rendering…" for the first moments of an edit's render (only one that stays slow says so: see the next test); `view.viewOptions
     /// {loupeMessages}` turns it back on for an agent (refusing a value that is not true or false).
     #[test]
     fn view_options_turn_the_rendering_message_off() {
@@ -6009,6 +6118,32 @@ mod tests {
         assert_eq!(r["result"]["loupeMessages"], true, "{r}");
         assert_eq!(h.app.ui.dialog, None, "a value sets it without opening the window");
         assert!(h.step_until(SETTLE, pill), "the message shows again while the render is held");
+        open.set(true);
+        assert!(h.step_until(SETTLE, |h| !pill(h)), "gone once the render lands");
+    }
+
+    /// With the message off, a render that is still on its way after a long wait (several seconds, not the
+    /// half second the message waits) says "Rendering…" anyway: the old photo on screen with no sign of work
+    /// looks like a frozen app. A short wait stays quiet, as the setting asks.
+    #[test]
+    fn a_render_that_stays_slow_says_so_even_with_the_message_off() {
+        use crate::render::Slot;
+        use std::{cell::Cell, rc::Rc};
+        let pill = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w == "loupe:rendering");
+        let mut h = demo([1000.0, 700.0]);
+        let t = Duration::from_secs(10);
+        h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
+        h.settle(SETTLE);
+        h.app.ui.settings.loupe_messages = false;
+        let open = Rc::new(Cell::new(false));
+        h.app.renderer.set_offload(Box::new(super::RenderGate::new(open.clone())));
+        h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.5}}), t);
+        for _ in 0..45 {
+            h.step();
+        }
+        assert!(h.app.renderer.is_pending(Slot::Main), "the edit's render is held");
+        assert!(!pill(&h), "a short wait stays quiet with the message off");
+        assert!(h.step_until(SETTLE, pill), "a long wait says so");
         open.set(true);
         assert!(h.step_until(SETTLE, |h| !pill(h)), "gone once the render lands");
     }
@@ -6089,5 +6224,41 @@ mod tests {
         assert_eq!(r["ok"], true);
         let r = h.request("ui.screenshot", json!({"headless": true}), SETTLE);
         assert_eq!(r["result"]["width"], 640, "{r}");
+    }
+
+    /// A size typed in the Export dialog is the size exported: the pixel fields kept only multiples
+    /// of 16, so 1080 became 1088 and 3000 became 3008.
+    #[test]
+    fn export_sizes_keep_the_pixels_typed() {
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), t);
+        h.settle(SETTLE);
+        let type_value = |h: &mut Headless, id: &str, text: &str| {
+            let r = h.request("ui.clickWidget", json!({"id": id}), t);
+            assert_eq!(r["ok"], true, "{id}: {r}");
+            h.request("ui.text", json!({"text": text}), t);
+            h.request("ui.key", json!({"key": "Enter"}), t);
+            h.settle(SETTLE);
+        };
+        let resize = |h: &Headless| match &h.app.ui.dialog {
+            Some(crate::state::Dialog::Export { resize, .. }) => *resize,
+            _ => panic!("the dialog closed"),
+        };
+        if let Some(crate::state::Dialog::Export { full_size, resize, .. }) = &mut h.app.ui.dialog {
+            *full_size = false;
+            *resize = lcc_engine::export::Resize::long_edge(2048);
+        }
+        h.settle(SETTLE);
+        type_value(&mut h, "sliderValue:export.sizePx", "3000");
+        assert_eq!(resize(&h).value, 3000.0);
+        if let Some(crate::state::Dialog::Export { resize, .. }) = &mut h.app.ui.dialog {
+            resize.mode = lcc_engine::export::ResizeMode::WidthHeight;
+            resize.height = 2048;
+        }
+        h.settle(SETTLE);
+        type_value(&mut h, "sliderValue:export.sizeW", "1080");
+        type_value(&mut h, "sliderValue:export.sizeH", "1350");
+        assert_eq!((resize(&h).value, resize(&h).height), (1080.0, 1350));
     }
 }

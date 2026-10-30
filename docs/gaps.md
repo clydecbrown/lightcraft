@@ -83,6 +83,7 @@ Beta-blocking gaps (B) total **~170–310 h**; with the stability and platform w
   sync rule, Windows renderer fallback, screen-fitting dialogs.
 - 2026-10-10: 0.6.0 (fork): content-aware Remove (PatchMatch), soft proofing against printer profiles, Map / Book /
   Slideshow / Web modules and publish services, plug-in host and SDK examples, golden PDF tests.
+- 2026-10-29: the Import review dialog allows selecting folders or files directly with an option to include or exclude subfolders (LR-IMP-ADD-DIALOG, cmd:dialog.import). This closes a usability subgap; no ranked gap or headline feature count closes.
 - 2026-10-20: the import review album picker follows the sidebar folder hierarchy and searches album paths (#2362, LR-IMP-ADD-DIALOG), retaining None/New album and existing destination IDs. This closes a usability subgap; no ranked gap or headline feature count closes.
 - 2026-10-11: Sony ILCA-99M2 profile.
 - 2026-10-11: Nikon edge bars on bodies without CropArea (#976, #914): 36 model / size / depth groups measured.

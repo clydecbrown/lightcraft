@@ -111,5 +111,7 @@
   "File format, colour space and bit depth: Settings → External Editing.": "Format pliku, przestrzeń kolorów i głębia bitowa: Ustawienia → Edycja zewnętrzna.",
   "Settings → External Editing → Edit In turns the question back on": "Ustawienia → Edycja zewnętrzna → Edytuj w ponownie włącza pytanie",
   "Don't ask again": "Nie pytaj ponownie",
-  "Indexing photos": "Indeksowanie zdjęć"
+  "Indexing photos": "Indeksowanie zdjęć",
+  "No supported photos found in this folder.": "W tym folderze nie znaleziono obsługiwanych zdjęć.",
+  "Include subfolders": "Uwzględnij podfoldery"
 }

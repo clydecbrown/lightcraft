@@ -1523,6 +1523,8 @@
   "Indexing photos": "写真をインデックス作成中",
   "Each photo gets the date and time in its file name (IMG_20260921_143000).": "各写真にファイル名の日時（IMG_20260921_143000）を設定します。",
   "No date in the active photo's file name": "アクティブな写真のファイル名に日付がありません",
+  "No supported photos found in this folder.": "このフォルダに対応する写真が見つかりません。",
+  "Include subfolders": "サブフォルダを含める",
   "Install from File…": "ファイルからインストール…",
   "Show Folder": "フォルダーを表示",
   "Permissions": "権限",

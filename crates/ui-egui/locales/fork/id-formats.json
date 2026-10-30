@@ -75,6 +75,8 @@
   "{} photos · {} aligned": "{} photos · {} aligned",
   "{} photos · {} aligned · {} left out": "{} photos · {} aligned · {} left out",
   "Version {new} is older than the installed version {installed}": "Versi {new} lebih lama dari versi terinstal {installed}",
+  "Folder “{}”": "Folder “{}”",
+  "{f} folder{}": "{f} folder{:.0}",
   "Module: {size} KB": "Modul: {size} KB",
   "by {author} · {id}": "oleh {author} · {id}"
 }

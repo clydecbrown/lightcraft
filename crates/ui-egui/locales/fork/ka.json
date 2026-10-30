@@ -111,5 +111,7 @@
   "File format, colour space and bit depth: Settings → External Editing.": "ფაილის ფორმატი, ფერთა სივრცე და ბიტური სიღრმე: პარამეტრები → გარე რედაქტირება.",
   "Settings → External Editing → Edit In turns the question back on": "პარამეტრები → გარე რედაქტირება → რედაქტირება აპში კითხვას ისევ ჩართავს",
   "Don't ask again": "აღარ მკითხო",
-  "Indexing photos": "ფოტოების ინდექსირება"
+  "Indexing photos": "ფოტოების ინდექსირება",
+  "No supported photos found in this folder.": "ამ საქაღალდეში მხარდაჭერილი ფოტოები ვერ მოიძებნა.",
+  "Include subfolders": "ქვესაქაღალდეების ჩართვა"
 }

@@ -1274,6 +1274,8 @@
   "Indexing photos": "Індексування фотографій",
   "Each photo gets the date and time in its file name (IMG_20260921_143000).": "Кожне фото отримує дату й час зі свого імені файлу (IMG_20260921_143000).",
   "No date in the active photo's file name": "В імені файлу активного фото немає дати",
+  "No supported photos found in this folder.": "У цій теці не знайдено підтримуваних фото.",
+  "Include subfolders": "Включати вкладені теки",
   "Install from File…": "Установити з файлу…",
   "Show Folder": "Показати теку",
   "Permissions": "Дозволи",

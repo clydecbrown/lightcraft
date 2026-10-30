@@ -82,6 +82,8 @@
   "{n} new photos in “{folder}”: right-click the folder ▸ Add New Photos": "{n} fotos novas em “{folder}”: clique com o botão direito na pasta ▸ Adicionar fotos novas",
   "{n} new photos in {folders} folders: see the badges in Folders": "{n} fotos novas em {folders} pastas: veja os selos em Pastas",
   "Version {new} is older than the installed version {installed}": "A versão {new} é mais antiga que a versão instalada {installed}",
+  "Folder “{}”": "Pasta “{}”",
+  "{f} folder{}": "{f} pasta{}",
   "Module: {size} KB": "Módulo: {size} KB",
   "by {author} · {id}": "por {author} · {id}"
 }

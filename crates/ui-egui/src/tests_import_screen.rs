@@ -157,3 +157,162 @@ fn the_rail_lists_cards_and_the_watched_folder_and_picking_one_scans_it() {
     h.settle(SETTLE);
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn dialog_import_with_path_and_paths_populates_candidates() {
+    let tmp = std::env::temp_dir().join(format!("lcc-import-dialog-cmd-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    let write_small_png = |path: &std::path::Path, seed: u8| {
+        let img = lcc_raster::Rgba8 { width: 8, height: 8, data: vec![[seed, 50, 100, 255]; 64] };
+        let png = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &lcc_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(path, png).unwrap();
+    };
+
+    let p1 = tmp.join("one.png");
+    let p2 = tmp.join("two.png");
+    write_small_png(&p1, 11);
+    write_small_png(&p2, 22);
+
+    let services = Services { png: None, pick_folder: Some(Box::new(|| None)), ..Default::default() };
+    let app = LccApp::new(lcc_engine::Session::with_demo().with_fs(), services);
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+
+    // 1. Invoke dialog.import with a folder "path"
+    let r = h.request("engine.execute", json!({"command": "dialog.import", "params": {"path": tmp.to_string_lossy()}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::Import { .. })), "dialog is open after path param");
+    assert_eq!(opts(&h).candidates.len(), 2, "both files found via path");
+    assert_eq!(cells(&h), 2);
+
+    // Close the dialog
+    h.app.ui.dialog = None;
+    h.settle(SETTLE);
+    assert!(h.app.ui.dialog.is_none());
+
+    // 2. Invoke dialog.import with a list of "paths"
+    let paths_val = vec![p1.to_string_lossy().to_string(), p2.to_string_lossy().to_string()];
+    let r = h.request("engine.execute", json!({"command": "dialog.import", "params": {"paths": paths_val}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::Import { .. })), "dialog is open after paths param");
+    assert_eq!(opts(&h).candidates.len(), 2, "both files found via paths");
+    assert_eq!(cells(&h), 2);
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn import_settings_survive_subfolder_rescan() {
+    let tmp = std::env::temp_dir().join(format!("lcc-import-settings-survive-{}", std::process::id()));
+    let sub = tmp.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    let write_small_png = |path: &std::path::Path, seed: u8| {
+        let img = lcc_raster::Rgba8 { width: 8, height: 8, data: vec![[seed, 50, 100, 255]; 64] };
+        let png = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &lcc_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(path, png).unwrap();
+    };
+
+    write_small_png(&tmp.join("root.png"), 10);
+    write_small_png(&sub.join("nested.png"), 20);
+
+    let services = Services { png: None, pick_folder: Some(Box::new(|| None)), ..Default::default() };
+    let app = LccApp::new(lcc_engine::Session::with_demo().with_fs(), services);
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+
+    // Open import from folder
+    let r = h.request("engine.execute", json!({"command": "dialog.import", "params": {"path": tmp.to_string_lossy()}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+
+    assert_eq!(opts(&h).candidates.len(), 2);
+
+    // Switch to Copy mode
+    click(&mut h, "button:importCopy");
+    assert!(opts(&h).copy && !opts(&h).move_files);
+
+    // Set keywords in the open dialog
+    if let Some(Dialog::Import { opts }) = &mut h.app.ui.dialog {
+        opts.keywords = "vacation, sunny".to_string();
+    }
+
+    // Toggle "Include subfolders" to trigger a re-scan
+    click(&mut h, "check:includeSubfolders");
+    assert!(!opts(&h).subfolders, "subfolders unchecked");
+
+    // After re-scan finishes, candidates update, but copy choice and keywords survive
+    assert_eq!(opts(&h).candidates.len(), 1, "only root file after excluding subfolders");
+    assert!(opts(&h).copy && !opts(&h).move_files, "copy mode survived re-scan");
+    assert_eq!(opts(&h).keywords, "vacation, sunny", "keywords survived re-scan");
+
+    // Switch to Move mode and re-enable subfolders to re-scan again
+    click(&mut h, "button:importMove");
+    assert!(opts(&h).move_files, "move mode selected");
+
+    click(&mut h, "check:includeSubfolders");
+    assert!(opts(&h).subfolders, "subfolders re-enabled");
+
+    // After re-scan finishes, move mode and keywords still survive
+    assert_eq!(opts(&h).candidates.len(), 2, "both root and nested restored");
+    assert!(opts(&h).copy && opts(&h).move_files, "move mode survived re-scan");
+    assert_eq!(opts(&h).keywords, "vacation, sunny", "keywords still preserved");
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn import_from_folder_with_subfolders_toggle_updates_candidates_and_imports() {
+    let tmp = std::env::temp_dir().join(format!("lcc-import-subfolders-{}", std::process::id()));
+    let sub = tmp.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    let write_small_png = |path: &std::path::Path, seed: u8| {
+        let img = lcc_raster::Rgba8 { width: 8, height: 8, data: vec![[seed, 50, 100, 255]; 64] };
+        let png = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &lcc_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(path, png).unwrap();
+    };
+
+    write_small_png(&tmp.join("root1.png"), 10);
+    write_small_png(&tmp.join("root2.png"), 20);
+    write_small_png(&sub.join("nested.png"), 30);
+
+    let services = Services { png: None, pick_folder: Some(Box::new(|| None)), ..Default::default() };
+    let app = LccApp::new(lcc_engine::Session::with_demo().with_fs(), services);
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+
+    let r = h.request("engine.execute", json!({"command": "file.addFolder", "params": {"path": tmp.to_string_lossy()}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::Import { .. })), "the import dialog is open");
+    assert!(opts(&h).subfolders, "subfolders is true by default");
+    assert_eq!(opts(&h).candidates.len(), 3, "initially discovers root1, root2, and nested");
+    assert_eq!(cells(&h), 3);
+
+    // Uncheck "Include subfolders"
+    click(&mut h, "check:includeSubfolders");
+    assert!(!opts(&h).subfolders, "subfolders is now false");
+    // After re-scan completes, only root photos are candidates
+    assert_eq!(opts(&h).candidates.len(), 2, "nested photo excluded when subfolders unchecked");
+    assert_eq!(cells(&h), 2);
+
+    // Click Import (Add in place)
+    click(&mut h, "button:importAdd");
+    let before = h.app.session.catalog.photos().count();
+    click(&mut h, "import:go");
+    assert!(h.app.ui.dialog.is_none(), "import dialog closes after starting import");
+
+    let start = std::time::Instant::now();
+    while h.app.session.catalog.photos().count() < before + 2 {
+        assert!(start.elapsed() < T, "imported 2 root photos");
+        h.step();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    assert_eq!(h.app.session.catalog.photos().count(), before + 2, "only 2 root photos imported");
+    let _ = std::fs::remove_dir_all(&tmp);
+}

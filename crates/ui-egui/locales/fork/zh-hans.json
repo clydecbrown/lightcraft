@@ -1445,6 +1445,8 @@
   "Indexing photos": "正在索引照片",
   "Each photo gets the date and time in its file name (IMG_20260921_143000).": "每张照片使用其文件名中的日期和时间（IMG_20260921_143000）。",
   "No date in the active photo's file name": "当前照片的文件名中没有日期",
+  "No supported photos found in this folder.": "在此文件夹中未找到受支持的照片。",
+  "Include subfolders": "包含子文件夹",
   "Install from File…": "从文件安装…",
   "Show Folder": "显示文件夹",
   "Permissions": "权限",

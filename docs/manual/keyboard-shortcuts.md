@@ -27,7 +27,7 @@ Alternative keymap set. Keys that work without a menu item (ratings `0`–`5`, l
 
 | Shortcut | Command | Menu | Id |
 |---|---|---|---|
-| `Cmd+Shift+I` | Import Photos… |  | `file.addPhotos` |
+| `Cmd+Shift+I` | Import… |  | `dialog.import` |
 | `Cmd+Q` | Quit <app> |  | `app.quit` |
 | `Cmd+Alt+Shift+E` | Export with Previous |  | `app.exportPrevious` |
 

@@ -82,6 +82,8 @@
   "{n} new photos in “{folder}”: right-click the folder ▸ Add New Photos": "「{folder}」に新しい写真が {n} 枚あります: フォルダーを右クリック ▸ 新しい写真を追加",
   "{n} new photos in {folders} folders: see the badges in Folders": "{folders} 個のフォルダーに新しい写真が {n} 枚あります: フォルダーのバッジを参照",
   "Version {new} is older than the installed version {installed}": "バージョン {new} はインストール済みのバージョン {installed} より古いです",
+  "Folder “{}”": "フォルダ「{}」",
+  "{f} folder{}": "{f}個のフォルダ{:.0}",
   "Module: {size} KB": "モジュール: {size} KB",
   "by {author} · {id}": "作成者 {author} · {id}"
 }

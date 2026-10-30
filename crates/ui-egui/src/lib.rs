@@ -236,6 +236,8 @@ mod tests_libtools;
 #[cfg(test)]
 mod tests_lightroom_destination;
 #[cfg(test)]
+mod tests_loading_cell;
+#[cfg(test)]
 mod tests_mask_effects;
 #[cfg(test)]
 mod tests_mask_sections;
@@ -253,6 +255,8 @@ mod tests_midi;
 mod tests_module_help;
 #[cfg(test)]
 mod tests_modules;
+#[cfg(test)]
+mod tests_mouse_nav;
 #[cfg(test)]
 mod tests_offline;
 #[cfg(test)]
@@ -615,6 +619,10 @@ pub struct LccApp {
     screenshot_token: u64,
     /// Offscreen context for headless screenshots of the windowed app.
     shadow: Option<headless::HeadlessView>,
+    /// Test-only: a delay for the sidebar's Missing Photos count worker (a slow disk). Kept here,
+    /// not in `ui`, because `ui.set` rebuilds `ui` and would drop it.
+    #[cfg(test)]
+    pub(crate) missing_count_test_delay: Option<std::time::Duration>,
     /// True while rendering a headless (CPU) screenshot: don't use GPU-only textures.
     headless_screenshotting: bool,
     /// Synthetic input events (from the control channel) injected one step per frame.
@@ -634,6 +642,10 @@ pub struct LccApp {
     synthetic_mods: egui::Modifiers,
     /// Clear `synthetic_mods` on the next frame.
     synthetic_mods_release: bool,
+    /// The mouse's Back / Forward buttons (`Extra1` / `Extra2`) pressed since the last UI pass.
+    /// [`Self::raw_input_hook`] takes their events out of egui's input, so no widget treats them
+    /// as a press (a slider would jump to the pointer, issue #3303); the shortcuts read them here.
+    pub(crate) nav_buttons: Vec<egui::PointerButton>,
     styled: bool,
     /// The language the installed fonts were built for: the CJK fallback order follows the UI
     /// language's script, so switching language reinstalls them.
@@ -849,6 +861,8 @@ impl LccApp {
             midi_active: None,
             pending_screenshots: vec![],
             screenshot_token: 0,
+            #[cfg(test)]
+            missing_count_test_delay: None,
             shadow: None,
             headless_screenshotting: false,
             synthetic: vec![],
@@ -859,6 +873,7 @@ impl LccApp {
             pending_camera_roll: None,
             synthetic_mods: egui::Modifiers::NONE,
             synthetic_mods_release: false,
+            nav_buttons: vec![],
             styled: false,
             font_language: i18n::Locale::En,
             chinese_font: None,
@@ -1672,23 +1687,54 @@ impl LccApp {
         self.ui.was_focused = focused;
         // auto import: list the watched folder every few seconds (on a worker thread: it may be on
         // a network share), then import what's new like any import (also on a worker thread)
+        // a folder that couldn't be read stops being one once another is watched (or none)
+        if self.ui.auto_import_error.as_ref().is_some_and(|(f, _)| self.session.import_defaults.auto_folder.as_ref() != Some(f)) {
+            self.ui.auto_import_error = None;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(folder) = self.session.import_defaults.auto_folder.clone() {
             const LABEL: &str = "Auto Import";
             let now = ctx.input(|i| i.time);
             if now - self.ui.auto_import_at >= 3.0
-                && self.import.is_none()
+                && !import::running(self)
                 && self.sync_run.is_none()
                 && self.lightroom.is_none()
                 && !self.tasks.is_running(LABEL)
             {
                 self.ui.auto_import_at = now;
-                let work = move || lcc_engine::cmd::library::list_auto_import_folder(&folder);
-                let done = |app: &mut LccApp, _ctx: &egui::Context, listing: Result<Vec<(String, u64)>, String>| {
+                let listed = folder.clone();
+                let work = move || lcc_engine::cmd::library::list_auto_import_folder(&listed);
+                let done = move |app: &mut LccApp, _ctx: &egui::Context, listing: Result<Vec<(String, u64)>, String>| {
+                    // the watched folder changed while this one was listed: its result is for nothing on screen
+                    if app.session.import_defaults.auto_folder.as_ref() != Some(&folder) {
+                        return;
+                    }
                     let listing = match listing {
-                        Ok(l) => l,
-                        Err(e) => return log::debug!("auto import: {e}"),
+                        Ok(l) => {
+                            if app.ui.auto_import_error.as_ref().is_some_and(|(f, _)| *f == folder) {
+                                app.ui.auto_import_error = None;
+                                log::info!("auto import: the watched folder can be read again: {folder}");
+                            }
+                            l
+                        }
+                        // removed, renamed, unmounted or not allowed: said once, not every few seconds
+                        Err(e) => {
+                            let error = Some((folder, e));
+                            if app.ui.auto_import_error != error {
+                                if let Some((_, e)) = &error {
+                                    log::warn!("auto import: can't read the watched folder {e}");
+                                }
+                                app.ui.auto_import_error = error;
+                            }
+                            return;
+                        }
                     };
+                    // an import, a scan (a finished Local browse replaces `app.import`), a sync or a Lightroom
+                    // migration that started while the folder was listed: scanning now would mark the new files as
+                    // tried without importing them; the next listing picks them up
+                    if import::running(app) || app.sync_run.is_some() || app.lightroom.is_some() {
+                        return;
+                    }
                     let p = serde_json::json!({"listing": listing, "start": false});
                     let Ok(r) = app.session.execute("library.autoImportScan", &p) else { return };
                     let Some(mut params) = r.get("import").cloned().filter(|_| app.import.is_none()) else { return };
@@ -1920,7 +1966,24 @@ impl LccApp {
     pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
         modern::before_input(self, raw);
         self.synthetic_input(raw);
+        self.take_nav_buttons(raw);
         modern::after_input(self, raw);
+    }
+
+    /// Take the mouse's Back / Forward button events (`Extra1` / `Extra2`) out of `raw` and keep
+    /// their presses for the next UI pass's shortcuts (issue #3303). egui treats any pressed
+    /// button as the start of a click or drag: left in, Back pressed over a slider would set it
+    /// to the pointer, on the photo navigation is about to switch to.
+    fn take_nav_buttons(&mut self, raw: &mut egui::RawInput) {
+        raw.events.retain(|event| match event {
+            egui::Event::PointerButton { button: button @ (egui::PointerButton::Extra1 | egui::PointerButton::Extra2), pressed, .. } => {
+                if *pressed {
+                    self.nav_buttons.push(*button);
+                }
+                false
+            }
+            _ => true,
+        });
     }
 
     fn synthetic_input(&mut self, raw: &mut egui::RawInput) {

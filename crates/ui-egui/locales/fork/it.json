@@ -109,5 +109,7 @@
   "Raw files and generated photos can only be edited as a copy with adjustments.": "I file raw si possono modificare solo come copia con le regolazioni.",
   "File format, colour space and bit depth: Settings → External Editing.": "Formato file, spazio colore e profondità di bit: Impostazioni → Modifica esterna.",
   "Settings → External Editing → Edit In turns the question back on": "Impostazioni → Modifica esterna → Modifica in riattiva la domanda",
-  "Indexing photos": "Indicizzazione delle foto"
+  "Indexing photos": "Indicizzazione delle foto",
+  "No supported photos found in this folder.": "Nessuna foto supportata trovata in questa cartella.",
+  "Include subfolders": "Includi sottocartelle"
 }

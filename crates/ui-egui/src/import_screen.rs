@@ -105,7 +105,8 @@ pub(crate) fn show(app: &mut LccApp, ctx: &egui::Context) {
         }
         ui.painter().text(pos2(b.right() + 12.0, header.center().y), Align2::LEFT_CENTER, crate::i18n::tr("Import"), t.semibold(17.0), t.text);
         // where the photos come from: "Source" and the summary (both translated), right-aligned
-        let from = if d.immich { crate::i18n::tr("Immich").to_string() } else { crate::import::source_summary(&d.sources) };
+        let from =
+            if d.immich { crate::i18n::tr("Immich").to_string() } else { crate::import::source_summary_with_subfolders(&d.sources, d.subfolders) };
         if header.width() > 520.0 && !from.is_empty() {
             let g = ui.painter().layout(from, t.font(12.0), t.text_label, header.width() * 0.4);
             let x = header.right() - 16.0 - g.size().x;
@@ -284,18 +285,38 @@ fn photos(app: &mut LccApp, ui: &mut egui::Ui, d: &mut ImportDialog, max_h: Opti
     if d.candidates.is_empty() {
         ui.add_space(24.0);
         ui.vertical_centered(|ui| {
-            ui.label(egui::RichText::new(crate::i18n::tr("No files chosen yet.")).color(t.text_dim));
+            let msg = if d.has_folder_source() {
+                crate::i18n::tr("No supported photos found in this folder.")
+            } else {
+                crate::i18n::tr("No files chosen yet.")
+            };
+            ui.label(egui::RichText::new(msg).color(t.text_dim));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if crate::widgets::text_button(ui, "importChooseFiles", crate::i18n::tr("Choose Files…"), false).clicked() {
-                    app.ui.dialog = None;
-                    let _ = app.run("file.addPhotos", json!({}));
-                }
-                if crate::widgets::text_button(ui, "importChooseFolder", crate::i18n::tr("Choose Folder…"), false).clicked() {
-                    app.ui.dialog = None;
+                let fb = crate::widgets::text_button(ui, "importChooseFolder", crate::i18n::tr("Choose Folder…"), false);
+                register(ui.ctx(), "import:chooseFolder", fb.rect);
+                register(ui.ctx(), "button:importChooseFolder", fb.rect);
+                if fb.clicked() {
                     let _ = app.run("file.addFolder", json!({}));
                 }
+                let pb = crate::widgets::text_button(ui, "importChooseFiles", crate::i18n::tr("Choose Files…"), false);
+                register(ui.ctx(), "import:chooseFiles", pb.rect);
+                register(ui.ctx(), "button:importChooseFiles", pb.rect);
+                if pb.clicked() {
+                    let _ = app.run("file.addPhotos", json!({}));
+                }
             });
+            ui.add_space(8.0);
+            let mut sub = d.subfolders;
+            let c = ui.checkbox(&mut sub, crate::i18n::tr("Include subfolders"));
+            register(ui.ctx(), "check:includeSubfolders", c.rect);
+            register(ui.ctx(), "check:importSubfolders", c.rect);
+            if c.changed() {
+                d.subfolders = sub;
+                if d.has_folder_source() {
+                    let _ = crate::import::rescan_with_subfolders(app, d, sub);
+                }
+            }
         });
         return;
     }
@@ -334,6 +355,30 @@ fn photos(app: &mut LccApp, ui: &mut egui::Ui, d: &mut ImportDialog, max_h: Opti
         }
         if crate::widgets::text_button(ui, "importNone", crate::i18n::tr("Uncheck All"), false).clicked() {
             d.checked.iter_mut().for_each(|c| *c = false);
+        }
+        if d.has_folder_source() {
+            ui.add_space(8.0);
+            let mut sub = d.subfolders;
+            let c = ui.checkbox(&mut sub, crate::i18n::tr("Include subfolders"));
+            register(ui.ctx(), "check:includeSubfolders", c.rect);
+            register(ui.ctx(), "check:importSubfolders", c.rect);
+            if c.changed() {
+                d.subfolders = sub;
+                let _ = crate::import::rescan_with_subfolders(app, d, sub);
+            }
+        }
+        ui.add_space(8.0);
+        let fb = crate::widgets::text_button(ui, "importChooseFolder", crate::i18n::tr("Choose Folder…"), false);
+        register(ui.ctx(), "import:chooseFolder", fb.rect);
+        register(ui.ctx(), "button:importChooseFolder", fb.rect);
+        if fb.clicked() {
+            let _ = app.run("file.addFolder", json!({}));
+        }
+        let pb = crate::widgets::text_button(ui, "importChooseFiles", crate::i18n::tr("Choose Files…"), false);
+        register(ui.ctx(), "import:chooseFiles", pb.rect);
+        register(ui.ctx(), "button:importChooseFiles", pb.rect);
+        if pb.clicked() {
+            let _ = app.run("file.addPhotos", json!({}));
         }
     });
     // what the scan left out, when it left something out

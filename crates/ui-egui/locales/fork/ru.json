@@ -1740,6 +1740,8 @@
   "Indexing photos": "Индексация фотографий",
   "Each photo gets the date and time in its file name (IMG_20260921_143000).": "Каждому фото присваиваются дата и время из имени файла (IMG_20260921_143000).",
   "No date in the active photo's file name": "В имени файла активного фото нет даты",
+  "No supported photos found in this folder.": "В этой папке не найдено поддерживаемых фото.",
+  "Include subfolders": "Включая вложенные папки",
   "Install from File…": "Установить из файла…",
   "Show Folder": "Показать папку",
   "Permissions": "Разрешения",

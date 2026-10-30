@@ -1324,7 +1324,9 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
         }
         // a clip is streamed (hash) and its headers read in place: never all of it in memory
         if crate::import::is_video_name(path) {
-            return probe_video_file(std::path::Path::new(path));
+            let mut info = probe_video_file(std::path::Path::new(path))?;
+            info.file_modified = file_modified(path);
+            return Ok(info);
         }
         let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
         let _permit = crate::memory::work_gate().acquire(len);
@@ -1360,12 +1362,12 @@ fn fs_load<T>(path: &str, max_edge: usize, load: impl FnOnce(Vec<u8>) -> Result<
     r
 }
 
-/// `path`'s modification time as ISO 8601 (see [`ProbeInfo::file_modified`]); `None` when the
-/// filesystem doesn't say or the time is before 1970.
+/// `path`'s modification time in this computer's time zone (see [`ProbeInfo::file_modified`]);
+/// `None` when the filesystem doesn't say or the time is outside 1970..=9999.
 fn file_modified(path: &str) -> Option<String> {
     let t = std::fs::metadata(path).ok()?.modified().ok()?;
     let secs = i64::try_from(t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs()).ok()?;
-    Some(crate::import::civil(secs))
+    lcc_catalog::dates::local(secs)
 }
 
 impl crate::Session {
@@ -1929,7 +1931,7 @@ pub(crate) mod tests {
         std::fs::write(&path, &jpeg).unwrap();
         let path = path.to_string_lossy().to_string();
         let mtime = std::fs::metadata(&path).unwrap().modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-        let want = crate::import::civil(mtime as i64);
+        let want = lcc_catalog::dates::local(mtime as i64).unwrap();
         let (_, probe) = fs_hooks();
         let info = probe(&path).unwrap();
         assert_eq!(info.captured, None, "the file itself has no date");

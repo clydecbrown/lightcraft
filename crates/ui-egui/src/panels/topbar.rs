@@ -194,15 +194,17 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
             let cloud_tip = unsaved.as_deref().unwrap_or("Sync: Peer-to-Peer or Immich");
             // Import Photos… beside Export, always one click away, with the key it is bound to now
             let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
-            let import_tip = match crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "file.addPhotos") {
-                Some(sc) => format!("{} ({})", crate::i18n::tr("Import Photos…"), crate::menubar::shortcut_text(sc, mac)),
-                None => crate::i18n::tr("Import Photos…").to_string(),
+            let import_tip = match crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "dialog.import")
+                .or_else(|| crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "file.addPhotos"))
+            {
+                Some(sc) => format!("{} ({})", crate::i18n::tr("Import…"), crate::menubar::shortcut_text(sc, mac)),
+                None => crate::i18n::tr("Import…").to_string(),
             };
             for (id, icon, tip, cmd) in [
                 ("cloud", Icon::Cloud, cloud_tip, ""),
                 ("help", Icon::Help, "Keyboard shortcuts", "app.shortcuts"),
                 ("share", Icon::Share, "Export", "dialog.export"),
-                ("import", Icon::Plus, import_tip.as_str(), "file.addPhotos"),
+                ("import", Icon::Plus, import_tip.as_str(), "dialog.import"),
             ] {
                 let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
                 let resp = ui.interact(r, egui::Id::new(("top", id)), Sense::click()).on_hover_text(crate::i18n::tr(tip));

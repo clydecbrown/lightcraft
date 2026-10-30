@@ -498,7 +498,7 @@ pub(crate) fn expand_noting(
     limits: crate::walk::Limits,
     note: Option<crate::walk::NoteFolder>,
 ) -> (Vec<String>, bool) {
-    let e = expand_report_noting(paths, skip, limits, note);
+    let e = expand_report_noting(paths, skip, limits, note, true);
     (e.files, e.truncated)
 }
 
@@ -522,12 +522,23 @@ pub struct Expansion {
 /// [`expand_within`] keeping the walks' diagnostics. A walk that stops at a bound is logged here
 /// (once per folder), as it always was.
 pub fn expand_report(paths: &[String], skip: Option<&Path>, limits: crate::walk::Limits) -> Expansion {
-    expand_report_noting(paths, skip, limits, None)
+    expand_report_noting(paths, skip, limits, None, true)
+}
+
+/// [`expand_report`] with an option to include or exclude subfolders of directory paths.
+pub fn expand_report_subfolders(paths: &[String], skip: Option<&Path>, limits: crate::walk::Limits, subfolders: bool) -> Expansion {
+    expand_report_noting(paths, skip, limits, None, subfolders)
 }
 
 /// ([`expand_report`], handing the listing of every folder that is walked to `note`, as
 /// [`expand_noting`] does.)
-fn expand_report_noting(paths: &[String], skip: Option<&Path>, limits: crate::walk::Limits, mut note: Option<crate::walk::NoteFolder>) -> Expansion {
+fn expand_report_noting(
+    paths: &[String],
+    skip: Option<&Path>,
+    limits: crate::walk::Limits,
+    mut note: Option<crate::walk::NoteFolder>,
+    subfolders: bool,
+) -> Expansion {
     let mut out = Expansion::default();
     for p in paths {
         let p = Path::new(p);
@@ -535,6 +546,7 @@ fn expand_report_noting(paths: &[String], skip: Option<&Path>, limits: crate::wa
             continue;
         }
         if p.is_dir() {
+            let walk_limits = if subfolders { limits } else { crate::walk::Limits { max_depth: 1, ..limits } };
             // XMP sidecars are read with their photos, not skipped: they are left out of the count
             let mut sidecars = 0usize;
             let keep = |f: &Path| {
@@ -545,10 +557,11 @@ fn expand_report_noting(paths: &[String], skip: Option<&Path>, limits: crate::wa
                 keep
             };
             let w = match note.as_mut() {
-                Some(note) => crate::walk::files_in_noting(p, skip, limits, keep, &mut **note),
-                None => crate::walk::files_in(p, skip, limits, keep),
+                Some(note) => crate::walk::files_in_noting(p, skip, walk_limits, keep, &mut **note),
+                None => crate::walk::files_in(p, skip, walk_limits, keep),
             };
-            if w.truncated {
+            let truncated = if subfolders { w.truncated } else { w.entries >= limits.max_entries };
+            if truncated {
                 log::warn!(
                     "import: stopped looking in {} after {} entries (limits: {} entries, {} folder levels)",
                     p.display(),
@@ -557,7 +570,7 @@ fn expand_report_noting(paths: &[String], skip: Option<&Path>, limits: crate::wa
                     limits.max_depth
                 );
             }
-            out.truncated |= w.truncated;
+            out.truncated |= truncated;
             out.unreadable = out.unreadable.saturating_add(w.unreadable);
             out.unsupported = out.unsupported.saturating_add(w.skipped.saturating_sub(sidecars));
             out.files.extend(w.files.into_iter().map(|f| f.to_string_lossy().to_string()));
@@ -874,7 +887,12 @@ pub fn scan_report(s: &mut Session, paths: &[String]) -> ScanOutput {
 /// [`scan`] without the session, so it can run on a worker thread. Stops early (returning what it
 /// has) when `progress.cancel` is set.
 pub fn scan_with(input: ScanInput, paths: &[String], progress: &ScanProgress) -> ScanOutput {
-    let expansion = expand_report(paths, input.skip.as_deref(), crate::walk::Limits::default());
+    scan_with_subfolders(input, paths, progress, true)
+}
+
+/// [`scan_with`] with an option to include or exclude subfolders of directory paths.
+pub fn scan_with_subfolders(input: ScanInput, paths: &[String], progress: &ScanProgress, subfolders: bool) -> ScanOutput {
+    let expansion = expand_report_subfolders(paths, input.skip.as_deref(), crate::walk::Limits::default(), subfolders);
     let mut out = scan_files(input, expansion.files, progress);
     out.truncated = expansion.truncated;
     out.unreadable = expansion.unreadable;
