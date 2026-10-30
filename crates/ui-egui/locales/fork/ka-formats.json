@@ -65,5 +65,7 @@
   "Add {n} New Photos…": "{n} ახალი ფოტოს დამატება…",
   "{n} new photos in “{folder}”: right-click the folder ▸ Add New Photos": "„{folder}“-ში {n} ახალი ფოტოა: დააწკაპუნეთ საქაღალდეზე მარჯვენა ღილაკით ▸ ახალი ფოტოების დამატება",
   "{n} new photos in {folders} folders: see the badges in Folders": "{folders} საქაღალდეში {n} ახალი ფოტოა: იხილეთ ნიშნები საქაღალდეებში",
-  "Version {new} is older than the installed version {installed}": "ვერსია {new} უფრო ძველია, ვიდრე დაყენებული ვერსია {installed}"
+  "Version {new} is older than the installed version {installed}": "ვერსია {new} უფრო ძველია, ვიდრე დაყენებული ვერსია {installed}",
+  "Module: {size} KB": "მოდული: {size} KB",
+  "by {author} · {id}": "ავტორი: {author} · {id}"
 }

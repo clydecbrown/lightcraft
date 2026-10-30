@@ -65,5 +65,7 @@
   "Add {n} New Photos…": "Přidat nové fotky ({n})…",
   "{n} new photos in “{folder}”: right-click the folder ▸ Add New Photos": "Nové fotky ve složce „{folder}“: {n}. Klikněte na složku pravým tlačítkem ▸ Přidat nové fotky",
   "{n} new photos in {folders} folders: see the badges in Folders": "Nové fotky: {n} ve složkách ({folders}). Viz značky v části Složky",
-  "Version {new} is older than the installed version {installed}": "Verze {new} je starší než nainstalovaná verze {installed}"
+  "Version {new} is older than the installed version {installed}": "Verze {new} je starší než nainstalovaná verze {installed}",
+  "Module: {size} KB": "Modul: {size} KB",
+  "by {author} · {id}": "autor: {author} · {id}"
 }

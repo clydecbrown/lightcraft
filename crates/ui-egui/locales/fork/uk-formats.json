@@ -71,5 +71,7 @@
   "Add {n} New Photos…": "Додати нові фото ({n})…",
   "{n} new photos in “{folder}”: right-click the folder ▸ Add New Photos": "Нових фото в «{folder}»: {n}. Клацніть папку правою кнопкою ▸ Додати нові фото",
   "{n} new photos in {folders} folders: see the badges in Folders": "Нових фото: {n} у папках ({folders}). Див. позначки в розділі «Папки»",
-  "Version {new} is older than the installed version {installed}": "Версія {new} старіша за встановлену версію {installed}"
+  "Version {new} is older than the installed version {installed}": "Версія {new} старіша за встановлену версію {installed}",
+  "Module: {size} KB": "Модуль: {size} КБ",
+  "by {author} · {id}": "автор {author} · {id}"
 }

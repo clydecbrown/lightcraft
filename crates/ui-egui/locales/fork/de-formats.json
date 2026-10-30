@@ -81,5 +81,7 @@
   "Add {n} New Photos…": "{n} neue Fotos hinzufügen…",
   "{n} new photos in “{folder}”: right-click the folder ▸ Add New Photos": "{n} neue Fotos in „{folder}“: Rechtsklick auf den Ordner ▸ Neue Fotos hinzufügen",
   "{n} new photos in {folders} folders: see the badges in Folders": "{n} neue Fotos in {folders} Ordnern: siehe die Markierungen unter Ordner",
-  "Version {new} is older than the installed version {installed}": "Version {new} ist älter als die installierte Version {installed}"
+  "Version {new} is older than the installed version {installed}": "Version {new} ist älter als die installierte Version {installed}",
+  "Module: {size} KB": "Modul: {size} KB",
+  "by {author} · {id}": "von {author} · {id}"
 }

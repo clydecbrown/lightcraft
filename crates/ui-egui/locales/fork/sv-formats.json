@@ -74,5 +74,7 @@
   "{} photos · not aligned": "{} photos · not aligned",
   "{} photos · {} aligned": "{} photos · {} aligned",
   "{} photos · {} aligned · {} left out": "{} photos · {} aligned · {} left out",
-  "Version {new} is older than the installed version {installed}": "Version {new} är äldre än den installerade versionen {installed}"
+  "Version {new} is older than the installed version {installed}": "Version {new} är äldre än den installerade versionen {installed}",
+  "Module: {size} KB": "Modul: {size} KB",
+  "by {author} · {id}": "av {author} · {id}"
 }
