@@ -680,7 +680,7 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
                 item("library.filter", json!({"rating": if f.rating == r { 0 } else { r }}), "★".repeat(r as usize), None, true, Some(f.rating == r))
             }));
             v.push(MenuNode::Separator);
-            v.push(item("library.filter", json!({"rating": 0}), "None", None, f.rating > 0, None));
+            v.push(item("library.filter", json!({"rating": 0}), "None", None, f.rating_filters(), None));
             v
         }
         "Set Rating" => (0..=5u8)
