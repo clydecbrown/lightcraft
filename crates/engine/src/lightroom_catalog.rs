@@ -996,13 +996,8 @@ fn mapped_settings(
 ) -> Result<(Value, Vec<String>), String> {
     let mut root = crate::preset_import::parse_lua(text)?;
     let deferred = strip_lua_sentinels(&mut root);
-    let (mut props, values) = crate::preset_import::lua_settings_props(&root)?;
-    // A catalog's develop settings carry the crop edges and angle but no `HasCrop` (XMP has it):
-    // any crop field means the photo is cropped.
-    const CROP: [&str; 5] = ["crs:CropLeft", "crs:CropTop", "crs:CropRight", "crs:CropBottom", "crs:CropAngle"];
-    if !props.contains_key("crs:HasCrop") && CROP.iter().any(|k| props.contains_key(*k)) {
-        props.insert("crs:HasCrop".into(), vec!["True".into()]);
-    }
+    // A catalog's develop settings carry no `HasCrop`: `crs::to_partial` takes any crop field as a crop.
+    let (props, values) = crate::preset_import::lua_settings_props(&root)?;
     let (mut partial, mut unknown) = crate::crs::to_partial_report(&props, Some(&values), target, aspect);
     catalog_crop(&mut partial, orientation, stored_aspect);
     if deferred > 0 {
