@@ -1822,6 +1822,10 @@ impl LccApp {
         if dropped.is_empty() {
             return;
         }
+        // a plug-in module dropped while the Plug-in Manager is open installs, not imports
+        if panels::plugins::take_drop(self, ctx, &dropped) {
+            return;
+        }
         // a dialog is on screen: the review would replace it, losing what it holds
         if self.ui.dialog.is_some() {
             self.toast(ctx, crate::i18n::tr("Close the open dialog, then drop the files again"));

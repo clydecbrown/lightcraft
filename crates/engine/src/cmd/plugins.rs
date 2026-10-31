@@ -181,7 +181,18 @@ fn list(_: &mut Session, _: &Value) -> Result<Value> {
             .iter()
             .filter(|f| !filter_files.contains(&f.file))
             .map(|f| {
-                let mut v = json!({"file": f.file, "error": f.error});
+                // its kind, so the Plug-in Manager lists it in its section: a module the filter
+                // registry recognises is a pixel filter, and the registry's error says why it
+                // didn't load (the plug-in manager's would say it isn't a plug-in)
+                use crate::filter_plugins::{FilterFile, filter_file_cached};
+                let path = f.path.clone().or_else(|| m.dir().map(|d| d.join(&f.file)));
+                let what = path.map_or(FilterFile::No, |p| filter_file_cached(&p));
+                let error = match &what {
+                    FilterFile::Refused(e) => e.as_str(),
+                    _ => f.error.as_str(),
+                };
+                let kind = if what == FilterFile::No { "plugin" } else { "filter" };
+                let mut v = json!({"file": f.file, "error": error, "kind": kind});
                 if !f.missing.is_empty() {
                     v["missing"] = json!(f.missing);
                 }
@@ -298,6 +309,9 @@ fn enable(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "plugin.enable";
     let id = id_param(p, C)?;
     let on = bool_or(p, "enabled", true);
+    if crate::filter_plugins::registry().get(id).is_some() {
+        return Err(bad(C, format!("{id:?} is a pixel filter: pixel filters can't be turned off, only removed")));
+    }
     let lib = s.plugin_library.clone();
     let r = with_library(&lib, |m| m.set_enabled(id, on).map(|_| json!({"id": id, "enabled": on})).map_err(|e| plugin_err(C, e)))?;
     sync_fields(s);
@@ -1371,6 +1385,53 @@ pub(crate) mod tests {
         assert!(log.as_array().unwrap().iter().any(|l| l == "downgraded from 1.2.0 to 1.1.0"), "{log}");
         s.execute("plugin.uninstall", &json!({"id": "test.ver"})).unwrap();
         let _ = std::fs::remove_dir_all(needs.parent().unwrap());
+    }
+
+    /// A module that didn't load is listed with its kind: a pixel filter's module as a filter, anything
+    /// else as a plug-in, so the Plug-in Manager shows it in its section.
+    #[test]
+    fn modules_that_did_not_load_are_listed_with_their_kind() {
+        let _turn = turn();
+        let mut s = Session::with_demo();
+        let dir = std::env::temp_dir().join(format!("lcc-engine-failed-kind-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let filter = dir.join("test.failedkind.filter.wasm");
+        std::fs::write(&filter, crate::tests_plugin_filters::invert_module("test.failedkind.filter")).unwrap();
+        // a filter module the registry refuses (its manifest isn't JSON)
+        let refused = dir.join("test.failedkind.refused.wasm");
+        let refused_bytes = crate::tests_plugin_filters::module("{ not a manifest", None);
+        let why = lcc_filters::Filter::load(&refused_bytes, lcc_filters::Limits::default()).expect_err("the filter is refused").to_string();
+        std::fs::write(&refused, &refused_bytes).unwrap();
+        let other = dir.join("test.failedkind.plugin.wasm");
+        std::fs::write(&other, b"\0asm and then nothing a module needs").unwrap();
+        let row = |path: &std::path::Path, id: &str| lcc_plugins::Failed {
+            file: path.file_name().unwrap().to_string_lossy().into_owned(),
+            error: "didn't load".into(),
+            missing: vec![],
+            id: id.into(),
+            path: Some(path.to_path_buf()),
+        };
+        let mut g = manager();
+        let m = g.get_or_insert_with(Manager::in_memory);
+        m.failed.push(row(&filter, "test.failedkind.filter"));
+        m.failed.push(row(&other, "test.failedkind.plugin"));
+        m.failed.push(row(&refused, "test.failedkind.refused"));
+        // a file that's gone isn't a filter
+        m.failed.push(row(&dir.join("test.failedkind.gone.wasm"), "test.failedkind.gone"));
+        drop(g);
+        let listed = s.execute("plugin.list", &json!({}));
+        manager().as_mut().unwrap().failed.retain(|f| !f.id.starts_with("test.failedkind."));
+        let _ = std::fs::remove_dir_all(&dir);
+        let listed = listed.unwrap();
+        let kind = |id: &str| listed["failed"].as_array().unwrap().iter().find(|f| f["id"] == id).map(|f| f["kind"].clone());
+        assert_eq!(kind("test.failedkind.filter"), Some(json!("filter")));
+        assert_eq!(kind("test.failedkind.plugin"), Some(json!("plugin")));
+        assert_eq!(kind("test.failedkind.gone"), Some(json!("plugin")));
+        // a refused filter: listed as one, with the filter registry's reason
+        assert_eq!(kind("test.failedkind.refused"), Some(json!("filter")));
+        let error = |id: &str| listed["failed"].as_array().unwrap().iter().find(|f| f["id"] == id).map(|f| f["error"].clone());
+        assert_eq!(error("test.failedkind.refused"), Some(json!(why)), "the filter's own reason");
+        assert_eq!(error("test.failedkind.plugin"), Some(json!("didn't load")), "a plug-in keeps the manager's");
     }
 
     /// A pixel filter's module also fails to load in the plug-in manager; `plugin.uninstall` by its

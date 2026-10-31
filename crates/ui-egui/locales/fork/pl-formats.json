@@ -67,5 +67,7 @@
   "{n} new photos in {folders} folders: see the badges in Folders": "Nowe zdjęcia: {n} w folderach ({folders}). Zobacz oznaczenia w sekcji Foldery",
   "Version {new} is older than the installed version {installed}": "Wersja {new} jest starsza niż zainstalowana wersja {installed}",
   "Folder “{}”": "Folder „{}”",
-  "{f} folder{}": "foldery: {f}{:.0}"
+  "{f} folder{}": "foldery: {f}{:.0}",
+  "Module: {size} KB": "Moduł: {size} KB",
+  "by {author} · {id}": "autor: {author} · {id}"
 }

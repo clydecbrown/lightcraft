@@ -76,5 +76,7 @@
   "{} photos · {} aligned · {} left out": "{} photos · {} aligned · {} left out",
   "Version {new} is older than the installed version {installed}": "Versio {new} on vanhempi kuin asennettu versio {installed}",
   "Folder “{}”": "Kansio ”{}”",
-  "{f} folder{}": "kansioita: {f}{:.0}"
+  "{f} folder{}": "kansioita: {f}{:.0}",
+  "Module: {size} KB": "Moduuli: {size} KB",
+  "by {author} · {id}": "tekijä: {author} · {id}"
 }
