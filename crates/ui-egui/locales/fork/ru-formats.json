@@ -87,5 +87,7 @@
   "{n} new photos in {folders} folders: see the badges in Folders": "Новых фото: {n} в папках ({folders}). См. отметки в разделе «Папки»",
   "Version {new} is older than the installed version {installed}": "Версия {new} старше установленной версии {installed}",
   "Folder “{}”": "Папка «{}»",
-  "{f} folder{}": "папок: {f}{:.0}"
+  "{f} folder{}": "папок: {f}{:.0}",
+  "Module: {size} KB": "Модуль: {size} КБ",
+  "by {author} · {id}": "автор {author} · {id}"
 }

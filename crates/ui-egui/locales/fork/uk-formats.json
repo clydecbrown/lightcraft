@@ -73,5 +73,7 @@
   "{n} new photos in {folders} folders: see the badges in Folders": "Нових фото: {n} у папках ({folders}). Див. позначки в розділі «Папки»",
   "Version {new} is older than the installed version {installed}": "Версія {new} старіша за встановлену версію {installed}",
   "Folder “{}”": "Тека «{}»",
-  "{f} folder{}": "тек: {f}{:.0}"
+  "{f} folder{}": "тек: {f}{:.0}",
+  "Module: {size} KB": "Модуль: {size} КБ",
+  "by {author} · {id}": "автор {author} · {id}"
 }

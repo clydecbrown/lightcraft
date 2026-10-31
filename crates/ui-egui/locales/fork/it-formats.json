@@ -67,5 +67,7 @@
   "{n} new photos in {folders} folders: see the badges in Folders": "{n} nuove foto in {folders} cartelle: vedi i badge in Cartelle",
   "Version {new} is older than the installed version {installed}": "La versione {new} è precedente alla versione installata {installed}",
   "Folder “{}”": "Cartella “{}”",
-  "{f} folder{}": "cartelle: {f}{:.0}"
+  "{f} folder{}": "cartelle: {f}{:.0}",
+  "Module: {size} KB": "Modulo: {size} KB",
+  "by {author} · {id}": "di {author} · {id}"
 }

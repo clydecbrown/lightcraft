@@ -30,9 +30,9 @@ These need the host feature **`settings`**: a plug-in that uses any of them says
 `"requires": ["settings"]` (see [Compatibility](#compatibility-requires-and-version)).
 
 - **Settings** (`settings: [{key, label, type, …}]`, at most 32, the same field types as dialogs)
-  are the plug-in's own options, kept for the whole app (not per library). The Plug-in Manager
-  shows a *Settings…* button on the plug-in's row, which opens its page: a Settings tab with the
-  fields, *Save* and *Cancel*. The plug-in reads them with `settings.get` (every key; the default
+  are the plug-in's own options, kept for the whole app (not per library). The plug-in's page in
+  the Plug-in Manager has a Settings tab with the fields, *Save* and *Revert*; a save that fails
+  keeps the values typed and says why. The plug-in reads them with `settings.get` (every key; the default
   for one never set or no longer fitting its field) and may change one with
   `settings.set {key, value}` (checked against its field; `null` goes back to the default).
   Engine commands: `plugin.settings {id}` and `plugin.setSettings {id, values}`. Saving is
@@ -265,8 +265,9 @@ hook that's never called, a host call that fails as an unknown method).
   app is updated again.
 - **Removing** a plug-in that didn't load (it needs missing features, or its module can't be read)
   works like any other: each `failed` row gives its `id`, `plugin.uninstall {id}` deletes its
-  module, its `plugins.json` entry and its data, and the Plug-in Manager shows a Remove button on
-  the row.
+  module, its `plugins.json` entry and its data, and the Plug-in Manager lists it with a
+  didn't-load mark (under Pixel Filters for a filter module) and a page that says why, with a
+  Remove button.
 - Versions of the app from before `requires` ignore it, like any field they don't know: the check
   protects from this version on.
 
@@ -462,6 +463,39 @@ The manifest fields:
 `plugin.exportDestinations`, `plugin.exportTo {plugin, destination, files, args?}`,
 `plugin.metadataFields {id?}`, `plugin.setField {plugin, field, value, id?}`.
 
+`plugin.list` gives `{dir, host, plugins, failed}`: `dir` is the plug-ins folder (`null`
+when plug-ins are kept in memory), and each `failed` row has `file`, `error`, `kind` (`plugin` or
+`filter`) and, when the module named one, `id`. A pixel filter module the filter loader refuses
+gives the loader's error, not the plug-in host's. `plugin.enable` refuses a pixel filter: filters can't be turned off,
+only removed.
+
+### The Plug-in Manager
+
+File ▸ Plug-ins ▸ Plug-in Manager… (Cmd+Alt+Shift+, on macOS, Ctrl+Alt+Shift+, elsewhere; it can
+be rebound in Keyboard Shortcuts) lists the plug-ins on the left, in two sections, Plug-ins and
+Pixel Filters, each with an icon drawn from its id (the same id always gets the same icon), its
+name, version and a mark: enabled, disabled or didn't load. The selected entry's page is on the
+right:
+
+- **A plug-in:** Enabled, Remove, and tabs: Settings (when it declares settings), Permissions (each
+  one it asks for, granted or revoked by its box), About (description, what it adds, its commands
+  to run, the module's size) and Log.
+- **A pixel filter:** Remove, its stage, whether it measures the photo (the cropped photo or the
+  whole one), its base tone, parameters, and the module's size and hash. Filters have no Enabled
+  box.
+- **A module that didn't load:** why, and Remove.
+
+*Install from File…* opens the file picker for a `.wasm` module, and dropping one `.wasm` file on
+the app while the window is open installs it too; either way the install dialog asks for the
+permissions first. The footer names the plug-ins folder, with *Show Folder* to open it.
+
+The window's own commands, for the control channel and `<cli> mcp --connect` (they exist only
+while the app runs): `plugins.manager {open?}` (toggles the window), `plugins.install {path?}` (the
+install dialog for `path`, or the file picker without one), `plugins.page {id, tab?, open?}` (the
+window with that entry selected, on `tab`: `settings`, `permissions`, `about` or `log`; it fails
+for a tab the entry doesn't have), `plugins.showFolder` (the folder in the system file manager) and
+`plugins.runItem {plugin, command}`.
+
 `app.export` runs the enabled export hooks after every export (the Export dialog, Export with
 Preset / Previous, the CLI, the control channel and MCP) and, with
 `pluginDestination: {plugin, destination, args?}`, hands the written files to that destination;
@@ -495,7 +529,7 @@ Besides the plug-ins above, <app> runs **pixel filters** written for PhotoCraft'
 `memory`, `pc_abi_version`, `pc_manifest`, `pc_alloc` and `pc_filter`. They install the same way
 (File ▸ Plug-ins ▸ Plug-in Manager…, or `<cli> commands plugin.install '{"path": "film.wasm"}'`): the host
 sniffs the exports and keeps filter modules in the same folder, in a registry of their own.
-`plugin.list` shows each as `{id, name, version, kind: "filter", params, moduleHash, analyze}`
+`plugin.list` shows each as `{id, name, version, kind: "filter", params, moduleHash, size, analyze}`
 (`params` is the manifest's spec); `plugin.uninstall` removes one. Filters ask for no permissions.
 
 A photo's filter stack is part of its develop settings (`develop.pluginFilter.add {plugin,
