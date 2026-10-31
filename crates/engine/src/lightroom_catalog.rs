@@ -943,6 +943,11 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
     refuse_non_media(&mut data);
     validate(&data).map_err(error)?;
     let mut warnings = data.warnings.clone();
+    // Records this import has just added, or promoted from Local untouched since browsing, hold
+    // no edits of the library's own, even when adding or browsing read develop settings from the
+    // file's XMP: the catalog's settings apply to them.
+    let changed: HashSet<_> = files.promoted_changed.iter().collect();
+    let added: HashSet<_> = files.imported.iter().filter(|id| !changed.contains(id)).copied().map(PhotoId).collect();
     let duplicates: HashMap<_, _> = files.duplicates.iter().filter_map(|d| d.existing.map(|id| (key(&d.path), PhotoId(id)))).collect();
     let mut by_path: HashMap<_, _> =
         s.catalog.photos().filter(|p| p.copy_of.is_none()).filter_map(|p| source_path(p).map(|path| (key(path), p.id))).collect();
@@ -1018,7 +1023,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         };
         ids.insert(src.source_id, p.id);
         index.photos.insert(identity(&data, src), p.id.0);
-        let keep_develop = existing_id.is_some() && p.edited.is_some() && !update_existing;
+        let keep_develop = existing_id.is_some_and(|id| !added.contains(&id)) && p.edited.is_some() && !update_existing;
         let previous_develop = (p.develop.clone(), p.edited.clone());
         if keep_develop {
             preserved += 1;
