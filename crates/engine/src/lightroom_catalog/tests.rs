@@ -1295,11 +1295,12 @@ fn oversized_optional_table_warns_and_is_skipped() {
 }
 
 /// Settings read from a file's XMP while this import adds it are not edits the library had: the
-/// catalog's settings win, for embedded XMP and sidecars alike, without `updateExisting`.
+/// catalog's settings win, for embedded XMP and sidecars alike, without `updateExisting`, and a
+/// setting the catalog leaves out (Lightroom omits those at zero) is not taken from the file.
 #[test]
 fn a_photo_this_import_adds_takes_the_catalogs_settings_over_its_files_xmp() {
     let dir = crate::tests_xmp::temp_dir("lightroom-embedded-edits");
-    let saved = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="+1.00" crs:Dehaze="0"/></rdf:RDF></x:xmpmeta>"#;
+    let saved = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="+1.00" crs:Dehaze="0" crs:Clarity2012="+20"/></rdf:RDF></x:xmpmeta>"#;
     let dng = dir.join("embedded.dng");
     std::fs::write(&dng, crate::tests_xmp::synthetic_dng_with(Some(saved), Default::default())).unwrap();
     let raw = dir.join("sidecar.dng");
@@ -1327,28 +1328,44 @@ fn a_photo_this_import_adds_takes_the_catalogs_settings_over_its_files_xmp() {
         skipped: Vec::new(),
     };
     let mut s = crate::Session::new().with_fs();
+    // a default import preset sets a value the catalog leaves out too
+    let preset = json!({"effects": {"texture": 12.0}});
+    s.presets.push(lightcraft_develop::Preset {
+        id: "look".into(),
+        name: "Look".into(),
+        group: "g".into(),
+        settings: preset,
+        favorite: false,
+        builtin: false,
+    });
+    s.import_defaults.raw_preset = Some("look".into());
     let r = apply(&mut s, data, false).unwrap();
     assert_eq!(r["imported"], 2, "{r}");
     assert_eq!(r["preservedExistingEdits"], 0, "the library held nothing before the import: {r}");
     for p in s.catalog.photos() {
         assert_eq!(p.develop.light.exposure, 1.0, "{}: the file's saved exposure and the catalog's agree", p.file_name);
         assert_eq!(p.develop.effects.dehaze, -50.0, "{}: the catalog's later edit is kept, not the file's", p.file_name);
+        assert_eq!(p.develop.effects.clarity, 0.0, "{}: a setting the catalog leaves out is not taken from the file", p.file_name);
+        assert_eq!(p.develop.effects.texture, 0.0, "{}: nor from a default import preset", p.file_name);
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A browsed (Local) photo joins the library through the import's add step. Settings browsing read
-/// from its file are not the library's edits and give way to the catalog's; a change made after
-/// browsing is kept, as for any other existing record.
+/// A browsed (Local) photo joins the library through the import's add step, or, when its original
+/// is offline, through the catalog import alone. Settings browsing read from its file are not the
+/// library's edits and give way to the catalog's; a change made after browsing is kept, as for any
+/// other existing record.
 #[test]
 fn a_browsed_photo_keeps_only_edits_made_after_browsing() {
-    for changed in [true, false] {
-        let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-browsed-edits-{changed}-{}", std::process::id()));
+    for (changed, offline) in [(true, false), (false, false), (true, true), (false, true)] {
+        let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-browsed-edits-{changed}-{offline}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("Photos")).unwrap();
         let source = dir.join("source.lrcat");
         let original = dir.join("Photos/test.ARW");
-        std::fs::write(&original, b"original").unwrap();
+        if !offline {
+            std::fs::write(&original, b"original").unwrap();
+        }
         let mut tables = photo_tables((dir.to_str().unwrap(), ""));
         tables.push((
             "Adobe_imageDevelopSettings",
@@ -1364,6 +1381,8 @@ fn a_browsed_photo_keeps_only_edits_made_after_browsing() {
         // as browsing a raw whose file's XMP holds develop settings leaves it
         let mut from_file = (*browsed.develop).clone();
         from_file.effects.dehaze = 10.0;
+        // a setting the catalog's develop text leaves out (Lightroom omits those at zero)
+        from_file.effects.clarity = 15.0;
         browsed.develop = Arc::new(from_file);
         browsed.edited = Some("before".into());
         browsed.set_local_baseline();
@@ -1376,15 +1395,17 @@ fn a_browsed_photo_keeps_only_edits_made_after_browsing() {
         let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap();
         let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
         let report = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap().report;
-        assert_eq!(report["imported"], 1, "the browsed photo joins the library: {report}");
+        assert_eq!(report["imported"], 1, "the browsed photo joins the library (offline: {offline}): {report}");
         let photo = s.catalog.photo(id).unwrap();
         assert!(!photo.local);
         if changed {
-            assert_eq!(report["preservedExistingEdits"], 1, "the edit came before the import: {report}");
-            assert_eq!(photo.develop.effects.dehaze, 25.0, "the library's edit is kept");
+            assert_eq!(report["preservedExistingEdits"], 1, "the edit came before the import (offline: {offline}): {report}");
+            assert_eq!(photo.develop.effects.dehaze, 25.0, "the library's edit is kept (offline: {offline})");
+            assert_eq!(photo.develop.effects.clarity, 15.0, "the kept settings are kept whole (offline: {offline})");
         } else {
-            assert_eq!(report["preservedExistingEdits"], 0, "browsing read the file, nobody edited it: {report}");
-            assert_eq!(photo.develop.effects.dehaze, -50.0, "the catalog's settings replace the file's");
+            assert_eq!(report["preservedExistingEdits"], 0, "browsing read the file, nobody edited it (offline: {offline}): {report}");
+            assert_eq!(photo.develop.effects.dehaze, -50.0, "the catalog's settings replace the file's (offline: {offline})");
+            assert_eq!(photo.develop.effects.clarity, 0.0, "a setting the catalog leaves out is not the file's (offline: {offline})");
         }
         std::fs::remove_dir_all(dir).unwrap();
     }

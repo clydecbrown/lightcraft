@@ -1155,10 +1155,19 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         }
         ids.insert(src.source_id, p.id);
         index.photos.insert(identity(&data, src), p.id.0);
-        let keep_develop = existing_id.is_some_and(|id| !added.contains(&id)) && p.edited.is_some() && !update_existing;
+        // A record this import added, or a Local one untouched since browsing (an offline original
+        // never reaches the add step, so it is judged here), holds no edits of the library's own.
+        let fresh = existing_id.is_some_and(|id| added.contains(&id) || s.catalog.photo(id).is_some_and(|q| q.untouched_local()));
+        let keep_develop = existing_id.is_some() && !fresh && p.edited.is_some() && !update_existing;
         let previous_develop = (p.develop.clone(), p.edited.clone());
         if keep_develop {
             preserved += 1;
+        }
+        // Lightroom leaves some settings at zero (Clarity, Texture) out of its develop text, so the
+        // catalog's settings start from the camera's defaults, not from what the file's XMP (or a
+        // default import preset) gave the photo. With no develop text there is nothing to replace.
+        if fresh && !src.settings.is_empty() {
+            p.develop = Arc::new(p.camera_defaults());
         }
         let orientation = lightroom_orientation(text(&src.image, "orientation")).unwrap_or_default();
         let stored_aspect = number(&src.image, "fileWidth") as f64 / number(&src.image, "fileHeight") as f64;
