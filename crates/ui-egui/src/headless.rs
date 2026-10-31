@@ -714,7 +714,8 @@ mod tests {
 
     /// A coordinate or delta too large for an `f32` became an infinite or NaN pointer position or
     /// scroll delta (egui panics on NaN positions in debug builds). Such a gesture is refused and
-    /// queues nothing; ordinary values and over-large `count` / `steps` still work.
+    /// queues nothing; ordinary values work, and an over-large `count` / `steps` is refused too
+    /// (`control::bounded_arg`: an error, never a silent clamp or a billion queued events).
     #[test]
     fn gestures_refuse_numbers_that_are_not_screen_positions() {
         let mut app = LccApp::new(lcc_engine::Session::new(), crate::Services::default());
@@ -736,10 +737,16 @@ mod tests {
             assert_eq!(r["ok"], false, "{method} {p}: {r}");
             assert!(r["error"].as_str().is_some_and(|e| e.starts_with(method) && e.contains("between")), "{r}");
         }
+        let r = h.request("ui.click", json!({"x": 10.0, "y": 5.0, "count": 2}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        let r = h.request("ui.drag", json!({"x": 1.0, "y": 1.0, "toX": 999_999.0, "toY": 1.0, "steps": 20}), t);
+        assert_eq!(r["ok"], true, "{r}");
         let r = h.request("ui.click", json!({"x": 10.0, "y": 5.0, "count": u64::MAX}), t);
-        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(r["ok"], false, "{r}");
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("`count`")), "{r}");
         let r = h.request("ui.drag", json!({"x": 1.0, "y": 1.0, "toX": 999_999.0, "toY": 1.0, "steps": 1e12}), t);
-        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(r["ok"], false, "{r}");
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("`steps`")), "{r}");
         h.step();
     }
 
